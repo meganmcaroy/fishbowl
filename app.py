@@ -21,41 +21,35 @@ FISHBOWL_COLUMNS = [
 # -----------------------------
 # Helper functions
 # -----------------------------
-def dedupe_prefix(sku: str, prefix: str) -> str:
-    sku = str(sku or "").strip()
-    if not sku:
-        return sku
-    if sku.upper().startswith(prefix.upper()):
-        return sku
-    return f"{prefix}{sku}"
-
 def normalize_col(s: str) -> str:
-    return s.strip().lower().replace(' ', '')
+    return str(s).strip().lower().replace(' ', '')
 
 def is_automated_cards(asana_row):
     if asana_row is None:
         return False
-    for k,v in asana_row.items():
-        if normalize_col(k) in {"section","section/column","column"} and str(v).strip().lower() == "automated cards":
+    for k, v in asana_row.items():
+        if normalize_col(k) in {"section", "section/column", "column"} and str(v).strip().lower() == "automated cards":
             return True
     return False
 
 def infer_order_type(asana_uv, asana_custom):
-    # Check custom first
+    # Blank if the Custom/Laser sheet flags "Blank"
     if asana_custom is not None:
-        for k,v in asana_custom.items():
-            if normalize_col(k) in {"section","section/column","column"} and str(v).strip().lower() == "blank":
+        for k, v in asana_custom.items():
+            if normalize_col(k) in {"section", "section/column", "column"} and str(v).strip().lower() == "blank":
                 return "BLANK"
+    # Otherwise UV if UV sheet says "UV printer" in Color Print
     if asana_uv is not None:
-        for k,v in asana_uv.items():
+        for k, v in asana_uv.items():
             if normalize_col(k) == "colorprint" and "uv printer" in str(v).strip().lower():
                 return "UV"
+    # Default to LASER
     return "LASER"
 
 # -----------------------------
 # UI Uploads
 # -----------------------------
-col1,col2,col3 = st.columns(3)
+col1, col2, col3 = st.columns(3)
 with col1:
     ns_file = st.file_uploader("Upload NetSuite CSV", type=['csv'])
 with col2:
@@ -91,43 +85,51 @@ def build_lookup(df):
     if not key_cols:
         return {}
     k = key_cols[0]
-    return {str(r[k]).strip().upper(): r.to_dict() for _,r in df.iterrows()}
+    return {str(r[k]).strip().upper(): r.to_dict() for _, r in df.iterrows()}
 
 uv_lookup = build_lookup(uv_df)
 custom_lookup = build_lookup(custom_df)
 
-# Merge logic
+# -----------------------------
+# Merge + SKU logic
+# -----------------------------
 rows = []
-for _,row in ns_df.iterrows():
+for _, row in ns_df.iterrows():
     key = str(row.get('SONum') or row.get('Document Number') or '').strip().upper()
     uv_row = uv_lookup.get(key)
     custom_row = custom_lookup.get(key)
 
+    # Skip Automated Cards
     if is_automated_cards(uv_row) or is_automated_cards(custom_row):
         continue
 
     order_type = infer_order_type(uv_row, custom_row)
     r = row.to_dict()
-    # SKU prefixing
+
+    # Find the column that holds the SKU/Product number
     itemcol = None
     for c in r.keys():
-        if normalize_col(c) in {"item","productnumber","sku"}:
+        if normalize_col(c) in {"item", "productnumber", "sku"}:
             itemcol = c
             break
-   
-        if itemcol:
+
+    # Only apply logic if we found a SKU column
+    if itemcol:
         sku = str(r[itemcol] or "").strip()
-        # If it's a blank order, leave SKU unchanged
+
+        # If it's a blank order, leave SKU unchanged (no prefixes)
         if order_type == 'BLANK' or sku.upper().startswith('BLANK'):
             r[itemcol] = sku
+
         elif order_type == 'UV':
-            # UV order → prefix with UV-, but don't double prefix
+            # UV order → must be exactly "UV-" + SKU (no "L-UV-")
             if not sku.upper().startswith('UV-'):
                 r[itemcol] = f"UV-{sku}"
             else:
                 r[itemcol] = sku
+
         else:
-            # Regular laser order → prefix with L-, unless already has it or UV-
+            # Regular laser order → prefix with "L-" unless already L- or UV-
             if not sku.upper().startswith(('L-', 'UV-')):
                 r[itemcol] = f"L-{sku}"
             else:
