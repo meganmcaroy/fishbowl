@@ -126,16 +126,27 @@ for _,row in ns_df.iterrows():
 
 out_df = pd.DataFrame(rows)
 
-# Reorder and fill missing columns
+# -------------------------------------------------------
+# Prepare Fishbowl output
+# -------------------------------------------------------
+# Ensure all required FB columns exist
 for c in FISHBOWL_COLUMNS:
     if c not in out_df.columns:
         out_df[c] = ''
 
-out_df = out_df[FISHBOWL_COLUMNS + ['__OrderType']]
+# Build the display/export column list safely (avoid KeyError)
+display_cols = FISHBOWL_COLUMNS + (["__OrderType"] if "__OrderType" in out_df.columns else [])
+# Reindex guarantees columns even if they're missing
+out_df = out_df.reindex(columns=display_cols)
 
 st.subheader("Preview Fishbowl Upload Data")
+if out_df.empty:
+    st.warning("No rows matched after Asana filtering (either not found in Asana, or in 'Automated Cards'). You'll still be able to download an empty template with the correct headers.")
 st.dataframe(out_df.head(100), use_container_width=True)
 
+# -------------------------------------------------------
+# Export
+# -------------------------------------------------------
 csv_data = out_df[FISHBOWL_COLUMNS].to_csv(index=False).encode('utf-8-sig')
 st.download_button("Download Fishbowl CSV", data=csv_data, file_name='fishbowl_upload.csv', mime='text/csv')
 
