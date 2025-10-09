@@ -1,0 +1,5 @@
+requirements.txt
+shell
+streamlit>=1.36
+pandas>=2.2
+openpyxl>=3.1
