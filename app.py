@@ -114,12 +114,24 @@ for _,row in ns_df.iterrows():
         if normalize_col(c) in {"item","productnumber","sku"}:
             itemcol = c
             break
-    if itemcol:
-        sku = r[itemcol]
-        if order_type == 'UV':
-            r[itemcol] = dedupe_prefix(sku,'UV-')
-        elif order_type == 'LASER':
-            r[itemcol] = dedupe_prefix(sku,'L-')
+   
+        if itemcol:
+        sku = str(r[itemcol] or "").strip()
+        # If it's a blank order, leave SKU unchanged
+        if order_type == 'BLANK' or sku.upper().startswith('BLANK'):
+            r[itemcol] = sku
+        elif order_type == 'UV':
+            # UV order → prefix with UV-, but don't double prefix
+            if not sku.upper().startswith('UV-'):
+                r[itemcol] = f"UV-{sku}"
+            else:
+                r[itemcol] = sku
+        else:
+            # Regular laser order → prefix with L-, unless already has it or UV-
+            if not sku.upper().startswith(('L-', 'UV-')):
+                r[itemcol] = f"L-{sku}"
+            else:
+                r[itemcol] = sku
 
     r['__OrderType'] = order_type
     rows.append(r)
