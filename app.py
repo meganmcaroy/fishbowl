@@ -28,7 +28,7 @@ def is_automated_cards(asana_row):
     if asana_row is None:
         return False
     for k, v in asana_row.items():
-        if normalize_col(k) in {"section", "section/column", "column"} and str(v).strip().lower() == "automated cards":
+        if normalize_col(k) in {"section","section/column","column"} and str(v).strip().lower() == "automated cards":
             return True
     return False
 
@@ -36,7 +36,7 @@ def infer_order_type(asana_uv, asana_custom):
     # Blank if the Custom/Laser sheet flags "Blank"
     if asana_custom is not None:
         for k, v in asana_custom.items():
-            if normalize_col(k) in {"section", "section/column", "column"} and str(v).strip().lower() == "blank":
+            if normalize_col(k) in {"section","section/column","column"} and str(v).strip().lower() == "blank":
                 return "BLANK"
     # Otherwise UV if UV sheet says "UV printer" in Color Print
     if asana_uv is not None:
@@ -45,6 +45,14 @@ def infer_order_type(asana_uv, asana_custom):
                 return "UV"
     # Default to LASER
     return "LASER"
+
+def is_blank_by_text(r: dict) -> bool:
+    """Treat rows as BLANK if CustomerName or SONum/Document Number starts with 'Blank'."""
+    for key in ('CustomerName', 'SONum', 'Document Number', 'DocumentNumber'):
+        val = str(r.get(key, '')).strip().lower()
+        if val.startswith('blank'):
+            return True
+    return False
 
 # -----------------------------
 # UI Uploads
@@ -103,8 +111,12 @@ for _, row in ns_df.iterrows():
     if is_automated_cards(uv_row) or is_automated_cards(custom_row):
         continue
 
-    order_type = infer_order_type(uv_row, custom_row)
     r = row.to_dict()
+    order_type = infer_order_type(uv_row, custom_row)
+
+    # ---- BLANK override based on text like "Blank CUS13085" ----
+    if is_blank_by_text(r):
+        order_type = 'BLANK'
 
     # Find the column that holds the SKU/Product number
     itemcol = None
@@ -117,23 +129,17 @@ for _, row in ns_df.iterrows():
     if itemcol:
         sku = str(r[itemcol] or "").strip()
 
-        # If it's a blank order, leave SKU unchanged (no prefixes)
-        if order_type == 'BLANK' or sku.upper().startswith('BLANK'):
+        if order_type == 'BLANK':
+            # Absolutely no prefix for blank orders
             r[itemcol] = sku
 
         elif order_type == 'UV':
             # UV order → must be exactly "UV-" + SKU (no "L-UV-")
-            if not sku.upper().startswith('UV-'):
-                r[itemcol] = f"UV-{sku}"
-            else:
-                r[itemcol] = sku
+            r[itemcol] = sku if sku.upper().startswith('UV-') else f"UV-{sku}"
 
         else:
             # Regular laser order → prefix with "L-" unless already L- or UV-
-            if not sku.upper().startswith(('L-', 'UV-')):
-                r[itemcol] = f"L-{sku}"
-            else:
-                r[itemcol] = sku
+            r[itemcol] = sku if sku.upper().startswith(('L-', 'UV-')) else f"L-{sku}"
 
     r['__OrderType'] = order_type
     rows.append(r)
