@@ -100,14 +100,24 @@ if uv_df is not None: st.info(f"Loaded UV Asana rows: {len(uv_df):,}")
 if custom_df is not None: st.info(f"Loaded Custom/Laser Asana rows: {len(custom_df):,}")
 
 # -----------------------------
-# Build Asana lookups by CUS#
+# Build Asana lookups by CUS# (dedupe-safe)
 # -----------------------------
 def build_asana_lookup_by_cus(df: pd.DataFrame | None) -> dict[str, dict]:
+    """
+    Create a dict keyed by CUS#, preferring rows that are NOT in 'Automated Cards'.
+    Handles duplicate CUS# by keeping the first non-automated row (or the first row if all automated).
+    """
     if df is None or "Name" not in df.columns:
         return {}
     tmp = df.copy()
     tmp["_CUS"] = tmp["Name"].map(get_cus_from_asana_name)
     tmp = tmp[tmp["_CUS"] != ""]
+    # Flag automated rows so we can sort them to the bottom
+    def _auto_flag(row):
+        return is_automated_cards(row.to_dict())
+    tmp["_AUTO"] = tmp.apply(_auto_flag, axis=1)
+    # Non-automated first, then drop duplicates by CUS, keeping the first
+    tmp = tmp.sort_values(by=["_AUTO"]).drop_duplicates(subset="_CUS", keep="first")
     return tmp.set_index("_CUS").to_dict(orient="index")
 
 uv_lookup = build_asana_lookup_by_cus(uv_df)
@@ -167,7 +177,7 @@ out_df = out_df.reindex(columns=display_cols)
 
 st.subheader("Preview Fishbowl Upload Data")
 if out_df.empty:
-    st.warning("No rows matched after Asana filtering (not found in either Asana sheet, or in 'Automated Cards').")
+    st.warning("No rows matched after Asana filtering (not in either Asana sheet, or in 'Automated Cards').")
 st.dataframe(out_df.head(100), use_container_width=True)
 
 # -----------------------------
@@ -175,3 +185,4 @@ st.dataframe(out_df.head(100), use_container_width=True)
 # -----------------------------
 csv_data = out_df[FISHBOWL_COLUMNS].to_csv(index=False).encode("utf-8-sig")
 st.download_button("Download Fishbowl CSV", data=csv_data, file_name="fishbowl_upload.csv", mime="text/csv")
+
