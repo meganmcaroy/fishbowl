@@ -7,7 +7,7 @@ import streamlit as st
 # -----------------------------
 st.set_page_config(page_title="Fishbowl Upload Transformer", layout="wide")
 st.title("Fishbowl Upload Transformer")
-st.caption("Transforms NetSuite + live Asana sheets into a Fishbowl-ready CSV with UV/Laser/Blank SKU logic.")
+st.caption("Transforms NetSuite + live Asana sheets into a Fishbowl-ready CSV. Keeps all Asana orders except 'Automated Cards' and applies UV/Laser/Blank SKU logic.")
 
 # -----------------------------
 # Live Google Sheet Links
@@ -27,7 +27,7 @@ FISHBOWL_COLUMNS = [
 ]
 
 # -----------------------------
-# Helpers
+# Helper functions
 # -----------------------------
 def normalize_col(s: str) -> str:
     return re.sub(r"\s+", "", str(s).strip().lower())
@@ -47,7 +47,7 @@ def extract_rhs_sku(item_value: str) -> str:
 
 def get_cus_from_asana_name(name: str) -> str:
     """Extract CUS##### from Asana Name column."""
-    m = re.search(r"CUS\\d{3,}", str(name))
+    m = re.search(r"CUS\d{3,}", str(name))
     return m.group(0).upper() if m else ""
 
 def is_automated_cards(asana_row: dict | None) -> bool:
@@ -59,7 +59,7 @@ def is_automated_cards(asana_row: dict | None) -> bool:
     return False
 
 def infer_order_type(uv_row: dict | None, custom_row: dict | None) -> str:
-    """UV priority > Blank > Laser"""
+    """Determine order type with UV priority > Blank > Laser"""
     if uv_row:
         for k, v in uv_row.items():
             if normalize_col(k) == "colorprint" and "uv printer" in str(v).strip().lower():
@@ -86,24 +86,14 @@ def fetch_asana(url: str):
         st.error(f"Could not fetch Asana sheet: {e}")
         return None
 
-def build_asana_lookup(df: pd.DataFrame | None) -> dict[str, dict]:
-    if df is None or "Name" not in df.columns:
-        return {}
-    tmp = df.copy()
-    tmp["_CUS"] = tmp["Name"].map(get_cus_from_asana_name)
-    tmp = tmp[tmp["_CUS"] != ""]
-    tmp["_AUTO"] = tmp.apply(lambda r: is_automated_cards(r.to_dict()), axis=1)
-    tmp = tmp.sort_values(by="_AUTO").drop_duplicates(subset="_CUS", keep="first")
-    return tmp.set_index("_CUS").to_dict(orient="index")
-
 # -----------------------------
-# UI
+# Load UI
 # -----------------------------
-col1, col2 = st.columns([1,1])
+col1, col2 = st.columns([1, 1])
 with col1:
     ns_file = st.file_uploader("Upload NetSuite export (.xls, .xlsx, .csv)", type=["xls","xlsx","csv"])
 with col2:
-    st.markdown("**Asana sheets:** pulled automatically from live Google Sheets")
+    st.markdown("**Asana sheets:** automatically fetched from live Google Sheets")
 
 if not ns_file:
     st.stop()
@@ -119,42 +109,54 @@ st.success(f"NetSuite rows loaded: {len(ns_df):,}")
 if uv_df is not None: st.info(f"UV Asana rows loaded: {len(uv_df):,}")
 if custom_df is not None: st.info(f"Custom/Laser Asana rows loaded: {len(custom_df):,}")
 
-uv_lookup = build_asana_lookup(uv_df)
-custom_lookup = build_asana_lookup(custom_df)
+# -----------------------------
+# Build usable Asana lists
+# -----------------------------
+def get_valid_asana_orders(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or "Name" not in df.columns:
+        return pd.DataFrame()
+    tmp = df.copy()
+    tmp["_CUS"] = tmp["Name"].map(get_cus_from_asana_name)
+    tmp = tmp[tmp["_CUS"] != ""]
+    tmp["_AUTO"] = tmp.apply(lambda r: is_automated_cards(r.to_dict()), axis=1)
+    tmp = tmp[~tmp["_AUTO"]]  # exclude automated cards
+    return tmp
+
+uv_valid = get_valid_asana_orders(uv_df)
+custom_valid = get_valid_asana_orders(custom_df)
+
+# Combine both Asana lists (UV has priority)
+asana_combined = pd.concat([uv_valid.assign(_SRC="UV"), custom_valid.assign(_SRC="CUSTOM")])
+asana_combined = asana_combined.drop_duplicates(subset="_CUS", keep="first")
 
 # -----------------------------
-# Process & transform
+# Match Asana to NetSuite
 # -----------------------------
 results = []
-for _, row in ns_df.iterrows():
-    cus = str(row.get("PO/Check Number", "")).strip().upper()
+for _, asana_row in asana_combined.iterrows():
+    cus = asana_row["_CUS"]
     if not cus:
         continue
 
-    uv_row = uv_lookup.get(cus)
-    custom_row = custom_lookup.get(cus)
-
-    if uv_row is None and custom_row is None:
-        continue
-    if is_automated_cards(uv_row) or is_automated_cards(custom_row):
+    ns_matches = ns_df[ns_df["PO/Check Number"].astype(str).str.strip().str.upper() == cus]
+    if ns_matches.empty:
         continue
 
-    order_type = infer_order_type(uv_row, custom_row)
-    r = row.to_dict()
-
-    # SKU logic
-    sku = extract_rhs_sku(r.get("Item", ""))
-    if order_type == "UV":
-        sku = dedupe_prefix(sku, "UV-")
-    elif order_type == "LASER":
-        sku = dedupe_prefix(sku, "L-")
-    r["ProductNumber"] = sku
-    r["__OrderType"] = order_type
-    results.append(r)
+    for _, ns_row in ns_matches.iterrows():
+        order_type = "UV" if asana_row["_SRC"] == "UV" else infer_order_type(None, asana_row.to_dict())
+        r = ns_row.to_dict()
+        sku = extract_rhs_sku(r.get("Item", ""))
+        if order_type == "UV":
+            sku = dedupe_prefix(sku, "UV-")
+        elif order_type == "LASER":
+            sku = dedupe_prefix(sku, "L-")
+        r["ProductNumber"] = sku
+        r["__OrderType"] = order_type
+        results.append(r)
 
 out_df = pd.DataFrame(results)
 
-# Preserve all NetSuite fields and reorder to Fishbowl columns
+# Fill missing Fishbowl columns
 for c in FISHBOWL_COLUMNS:
     if c not in out_df.columns:
         out_df[c] = ""
@@ -165,11 +167,12 @@ out_df = out_df.reindex(columns=FISHBOWL_COLUMNS + (["__OrderType"] if "__OrderT
 # -----------------------------
 st.subheader("Preview (first 100 rows)")
 if out_df.empty:
-    st.warning("No rows matched after Asana filtering (not found or in 'Automated Cards').")
+    st.warning("No rows matched — check that your NetSuite PO/Check Number aligns with CUS# in Asana.")
 else:
     st.dataframe(out_df.head(100), use_container_width=True)
 
 csv_bytes = out_df[FISHBOWL_COLUMNS].to_csv(index=False).encode("utf-8-sig")
 st.download_button("Download Fishbowl CSV", data=csv_bytes, file_name="fishbowl_upload.csv", mime="text/csv")
+
 
 
