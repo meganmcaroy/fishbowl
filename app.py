@@ -187,27 +187,27 @@ if matched.empty:
     st.stop()
 
 # =========================================
-# ProductNumber Logic
+# ProductNumber Logic (after colon)
 # =========================================
-def determine_sku(row):
-    item = row.get("Item") or row.get("Product Description") or ""
+def determine_product_number(row):
+    desc = row.get("Item") or row.get("Product Description") or ""
     src = row.get("_SRC", "")
-    if not has_colon(item):
-        return item.strip()  # leave as-is for non-custom SKUs
-    rhs = extract_rhs_sku(item)
+    if not desc or ":" not in desc:
+        return desc.strip()  # leave as-is for items without colon
+    rhs = desc.split(":", 1)[1].strip()
     if src == "UV":
         return dedupe_prefix(rhs, "UV-")
     elif src == "CUSTOM":
         return dedupe_prefix(rhs, "L-")
     return rhs
 
-matched["ProductNumber"] = matched.apply(determine_sku, axis=1)
+matched["ProductNumber"] = matched.apply(determine_product_number, axis=1)
+out_df = pd.DataFrame()
 
 # =========================================
-# Map columns (fuzzy-matched)
+# Map columns
 # =========================================
 map_dict = fuzzy_map_columns(matched.columns)
-out_df = pd.DataFrame()
 for src_col, fb_col in map_dict.items():
     if src_col in matched.columns:
         out_df[fb_col] = matched[src_col]
@@ -279,6 +279,12 @@ def make_sonum(row):
 
 out_df["SONum"] = matched.apply(make_sonum, axis=1)
 
+# ProductDescription keeps full text
+if "Item" in matched.columns:
+    out_df["ProductDescription"] = matched["Item"]
+elif "Product Description" in matched.columns:
+    out_df["ProductDescription"] = matched["Product Description"]
+
 # Final column order
 out_df = out_df[FISHBOWL_COLUMNS]
 
@@ -294,6 +300,5 @@ st.download_button("Download Fishbowl CSV", data=csv_data, file_name="fishbowl_u
 # Debug mapping
 st.markdown("### 🔍 Column mapping used:")
 st.json(map_dict)
-
 
 
