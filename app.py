@@ -8,7 +8,7 @@ from difflib import get_close_matches
 # =========================================
 st.set_page_config(page_title="Fishbowl Upload Transformer", layout="wide")
 st.title("Fishbowl Upload Transformer")
-st.caption("Transforms NetSuite + Asana data into a Fishbowl-ready CSV with full billing/shipping parsing and correct Fishbowl defaults.")
+st.caption("Transforms NetSuite + Asana data into a Fishbowl-ready CSV with full billing/shipping parsing and final SONum logic.")
 
 # =========================================
 # Live Google Sheet Links
@@ -226,9 +226,6 @@ if "Shipping Address" in matched.columns:
     out_df["ShipToZip"] = parsed_ship.apply(lambda x: x[3])
     out_df["ShipToCountry"] = parsed_ship.apply(lambda x: x[4])
 
-# Fix SONum → use CUS number
-out_df["SONum"] = matched["_CUS"]
-
 # PONum → use Document Number (SO number)
 if "Document Number" in matched.columns:
     out_df["PONum"] = matched["Document Number"]
@@ -242,8 +239,23 @@ out_df["ItemQuickBooksClassName"] = "None"
 out_df["ShowItem"] = "TRUE"
 out_df["KitItem"] = "FALSE"
 
-# Copy ProductNumber
+# Product number
 out_df["ProductNumber"] = matched["ProductNumber"]
+
+# =========================================
+# SONum Logic — prefix based on SKU
+# =========================================
+def make_sonum(row):
+    cus = row.get("_CUS", "").strip()
+    sku = row.get("ProductNumber", "").strip().upper()
+    if sku.startswith("UV-"):
+        return f"UV {cus}"
+    elif sku.startswith("L-"):
+        return f"{cus}"
+    else:
+        return f"Blank {cus}"
+
+out_df["SONum"] = matched.apply(make_sonum, axis=1)
 
 # Final column order
 out_df = out_df[FISHBOWL_COLUMNS]
@@ -260,3 +272,4 @@ st.download_button("Download Fishbowl CSV", data=csv_data, file_name="fishbowl_u
 # Debug mapping
 st.markdown("### 🔍 Column mapping used:")
 st.json(map_dict)
+
