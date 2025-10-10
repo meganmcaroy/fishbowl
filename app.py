@@ -8,7 +8,7 @@ from difflib import get_close_matches
 # =========================================
 st.set_page_config(page_title="Fishbowl Upload Transformer", layout="wide")
 st.title("Fishbowl Upload Transformer")
-st.caption("Transforms NetSuite + Asana data into a Fishbowl-ready CSV with full billing/shipping parsing and final field logic.")
+st.caption("Transforms NetSuite + Asana data into a Fishbowl-ready CSV with full billing/shipping parsing and correct Fishbowl defaults.")
 
 # =========================================
 # Live Google Sheet Links
@@ -233,9 +233,14 @@ out_df["SONum"] = matched["_CUS"]
 if "Document Number" in matched.columns:
     out_df["PONum"] = matched["Document Number"]
 
-# Tax rate and carrier defaults
+# Tax rate, carrier, and item defaults
 out_df["TaxRateName"] = "None"
 out_df["CarrierName"] = "Will Call"
+out_df["Taxable"] = "FALSE"
+out_df["TaxCode"] = "NON"
+out_df["ItemQuickBooksClassName"] = "None"
+out_df["ShowItem"] = "TRUE"
+out_df["KitItem"] = "FALSE"
 
 # Copy ProductNumber
 out_df["ProductNumber"] = matched["ProductNumber"]
@@ -255,4 +260,3 @@ st.download_button("Download Fishbowl CSV", data=csv_data, file_name="fishbowl_u
 # Debug mapping
 st.markdown("### 🔍 Column mapping used:")
 st.json(map_dict)
-
