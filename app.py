@@ -7,7 +7,7 @@ import streamlit as st
 # =========================================
 st.set_page_config(page_title="Fishbowl Upload Transformer", layout="wide")
 st.title("Fishbowl Upload Transformer")
-st.caption("Transforms NetSuite + Asana into a Fishbowl-ready CSV. Matches NetSuite 'PO/Check Number' to Asana '#CUS#####' in 'Name' column.")
+st.caption("Transforms NetSuite + Asana into a Fishbowl-ready CSV. Matches NetSuite 'PO/Check Number' to Asana '#CUS#####' in 'Name' column, maps all NetSuite fields into Fishbowl format.")
 
 # =========================================
 # Live Google Sheet Links
@@ -27,7 +27,7 @@ FISHBOWL_COLUMNS = [
 ]
 
 # =========================================
-# Helper Functions
+# Helper functions
 # =========================================
 CUS_RE = re.compile(r"CUS\d{3,}", re.IGNORECASE)
 
@@ -58,20 +58,14 @@ def extract_rhs_sku(item_value: str) -> str:
     return val.split(":", 1)[1].strip() if ":" in val else val
 
 def read_ns(file):
-    name = file.name.lower()
     try:
         df = pd.read_csv(file, dtype=str).fillna("")
         if df.shape[1] == 1:
             file.seek(0)
             df = pd.read_csv(file, dtype=str, sep="\t").fillna("")
-        if df.shape[1] == 1:
-            file.seek(0)
-            df = pd.read_csv(file, dtype=str, sep="\t", encoding="cp1252").fillna("")
         return df
     except Exception:
-        if name.endswith(".xlsx"):
-            return pd.read_excel(file, dtype=str, engine="openpyxl").fillna("")
-        return pd.read_excel(file, dtype=str, engine="xlrd").fillna("")
+        return pd.read_excel(file, dtype=str, engine="openpyxl").fillna("")
 
 def fetch_asana(url):
     try:
@@ -79,6 +73,34 @@ def fetch_asana(url):
     except Exception as e:
         st.error(f"Could not fetch Asana sheet: {e}")
         return pd.DataFrame()
+
+# =========================================
+# Column Mapping (NetSuite → Fishbowl)
+# =========================================
+MAPPING = {
+    "Document Number": "SONum",
+    "PO/Check Number": "PONum",
+    "Customer": "CustomerName",
+    "Ship To": "ShipToName",
+    "Ship To Address": "ShipToAddress",
+    "Ship To City": "ShipToCity",
+    "Ship To State": "ShipToState",
+    "Ship To Zip": "ShipToZip",
+    "Ship To Country": "ShipToCountry",
+    "Bill To": "BillToName",
+    "Bill To Address": "BillToAddress",
+    "Bill To City": "BillToCity",
+    "Bill To State": "BillToState",
+    "Bill To Zip": "BillToZip",
+    "Bill To Country": "BillToCountry",
+    "Sales Rep": "Salesman",
+    "Order Date": "Date",
+    "Item": "ProductDescription",
+    "Quantity": "ProductQuantity",
+    "Price": "ProductPrice",
+    "Phone": "Phone",
+    "Email": "Email"
+}
 
 # =========================================
 # UI
@@ -96,19 +118,10 @@ if not ns_file:
 # Load data
 # =========================================
 ns_df = read_ns(ns_file)
-ns_df.columns = [str(c).strip().replace('"','').replace("'", "") for c in ns_df.columns]
+ns_df.columns = [str(c).strip() for c in ns_df.columns]
 
 uv_df = fetch_asana(UV_SHEET_CSV)
 custom_df = fetch_asana(CUSTOM_SHEET_CSV)
-
-# Confirm key fields exist
-if "PO/Check Number" not in ns_df.columns:
-    st.error("Missing 'PO/Check Number' column in NetSuite file.")
-    st.stop()
-
-if "Item" not in ns_df.columns:
-    st.error("Missing 'Item' column in NetSuite file.")
-    st.stop()
 
 # =========================================
 # Prepare Asana data
@@ -125,24 +138,22 @@ def prep_asana(df, source):
 
 uv_valid = prep_asana(uv_df, "UV")
 custom_valid = prep_asana(custom_df, "CUSTOM")
-
 asana_all = pd.concat([uv_valid, custom_valid], ignore_index=True)
 asana_all = asana_all.sort_values(by=["_SRC"], key=lambda s: s.map({"UV":0,"CUSTOM":1})).drop_duplicates(subset="_CUS", keep="first")
 
 # =========================================
-# Match by PO/Check Number (NetSuite) → Name (Asana)
+# Match by PO/Check Number
 # =========================================
 ns_df["_CUS_KEY"] = ns_df["PO/Check Number"].apply(lambda x: re.sub(r"[^A-Za-z0-9]", "", str(x)).upper())
 asana_all["_CUS_KEY"] = asana_all["_CUS"].apply(lambda x: re.sub(r"[^A-Za-z0-9]", "", str(x)).upper())
-
 matched = ns_df.merge(asana_all[["_CUS_KEY", "_SRC"]], on="_CUS_KEY", how="inner")
 
 if matched.empty:
-    st.warning("No NetSuite orders matched Asana CUS numbers. Ensure 'PO/Check Number' matches the '#CUS#####' in Asana 'Name'.")
+    st.warning("No NetSuite orders matched Asana CUS numbers. Ensure 'PO/Check Number' matches '#CUS#####' in Asana 'Name'.")
     st.stop()
 
 # =========================================
-# Apply SKU Prefix
+# Apply SKU Prefix Logic
 # =========================================
 def determine_sku(row):
     rhs = extract_rhs_sku(row.get("Item", ""))
@@ -150,32 +161,29 @@ def determine_sku(row):
     if src == "UV":
         return dedupe_prefix(rhs, "UV-")
     elif src == "CUSTOM":
-        cus = row.get("_CUS_KEY", "")
-        if not custom_df.empty:
-            match = custom_df[custom_df["_CUS_KEY"].str.contains(cus, na=False, case=False)] if "_CUS_KEY" in custom_df.columns else custom_df
-            if not match.empty:
-                for c in match.columns:
-                    if re.sub(r"\s+|[/_]", "", str(c).lower()) in {"section","sectioncolumn","column"}:
-                        if str(match.iloc[0][c]).strip().lower() == "blank":
-                            return rhs
         return dedupe_prefix(rhs, "L-")
     return rhs
 
 matched["ProductNumber"] = matched.apply(determine_sku, axis=1)
 
 # =========================================
-# Fill all columns, preserve NetSuite data
+# Map NetSuite → Fishbowl Columns
 # =========================================
-out_df = matched.copy()
-for c in FISHBOWL_COLUMNS:
-    if c not in out_df.columns:
-        out_df[c] = ""
+out_df = pd.DataFrame()
+for src_col, fb_col in MAPPING.items():
+    if src_col in matched.columns:
+        out_df[fb_col] = matched[src_col]
+for col in FISHBOWL_COLUMNS:
+    if col not in out_df.columns:
+        out_df[col] = ""
 
-out_df = out_df.reindex(columns=FISHBOWL_COLUMNS)
+out_df["ProductNumber"] = matched["ProductNumber"]
 
 # =========================================
-# Preview + Download
+# Final Output
 # =========================================
+out_df = out_df[FISHBOWL_COLUMNS]
+
 st.subheader("Preview (first 100 rows)")
 st.dataframe(out_df.head(100), use_container_width=True)
 
