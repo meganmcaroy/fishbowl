@@ -55,12 +55,12 @@ def dedupe_prefix(sku: str, prefix: str) -> str:
         return sku
     return sku if sku.upper().startswith(prefix.upper()) else f"{prefix}{sku}"
 
-def extract_rhs_sku(item_value: str) -> str:
-    """Return the part after ':' if present, otherwise the full value."""
-    val = str(item_value or "").strip()
-    if ":" in val:
-        return val.split(":", 1)[1].strip()
-    return val
+def extract_after_colon(text: str) -> str:
+    """Get everything after ':' and uppercase it."""
+    text = str(text or "").strip()
+    if ":" in text:
+        return text.split(":", 1)[1].strip().upper()
+    return text.upper()
 
 def has_colon(item_value: str) -> bool:
     return ":" in str(item_value or "")
@@ -91,36 +91,6 @@ def fetch_asana(url):
     except Exception as e:
         st.error(f"Could not fetch Asana sheet: {e}")
         return pd.DataFrame()
-
-# =========================================
-# Fuzzy column matcher
-# =========================================
-EXPECTED_KEYS = {
-    "document number": "SONum",
-    "status": "Status",
-    "po/check number": "PONum",
-    "bill to address": "BillToAddress",
-    "ship to address": "ShipToAddress",
-    "sales rep": "Salesman",
-    "order date": "Date",
-    "date created": "Date",
-    "transaction date": "Date",
-    "item": "ProductDescription",
-    "quantity": "ProductQuantity",
-    "price": "ProductPrice",
-    "phone": "Phone",
-    "email": "Email"
-}
-
-def fuzzy_map_columns(ns_cols):
-    mapped = {}
-    lower_ns = [c.lower().strip() for c in ns_cols]
-    for expected, target in EXPECTED_KEYS.items():
-        matches = get_close_matches(expected, lower_ns, n=1, cutoff=0.6)
-        if matches:
-            found = ns_cols[lower_ns.index(matches[0])]
-            mapped[found] = target
-    return mapped
 
 def parse_address(full_address: str):
     """Try to split full address string into address, city, state, zip, country."""
@@ -187,38 +157,34 @@ if matched.empty:
     st.stop()
 
 # =========================================
-# ProductNumber Logic (after colon)
+# ProductNumber Logic
 # =========================================
 def determine_product_number(row):
     desc = row.get("Item") or row.get("Product Description") or ""
     src = row.get("_SRC", "")
-    if not desc or ":" not in desc:
-        return desc.strip()  # leave as-is for items without colon
-    rhs = desc.split(":", 1)[1].strip()
+    sku = extract_after_colon(desc)
+    if not sku:
+        return ""
+    # Apply prefix rules
     if src == "UV":
-        return dedupe_prefix(rhs, "UV-")
+        return dedupe_prefix(sku, "UV-")
     elif src == "CUSTOM":
-        return dedupe_prefix(rhs, "L-")
-    return rhs
+        return dedupe_prefix(sku, "L-")
+    else:
+        return sku
 
 matched["ProductNumber"] = matched.apply(determine_product_number, axis=1)
-out_df = pd.DataFrame()
 
 # =========================================
-# Map columns
+# Build Output Frame
 # =========================================
-map_dict = fuzzy_map_columns(matched.columns)
-for src_col, fb_col in map_dict.items():
-    if src_col in matched.columns:
-        out_df[fb_col] = matched[src_col]
+out_df = pd.DataFrame(columns=FISHBOWL_COLUMNS)
 
-for col in FISHBOWL_COLUMNS:
-    if col not in out_df.columns:
-        out_df[col] = ""
+# Fill known fields
+out_df["ProductDescription"] = matched["Item"] if "Item" in matched.columns else matched["Product Description"]
+out_df["ProductNumber"] = matched["ProductNumber"]
 
-# =========================================
-# Override key fields
-# =========================================
+# Billing info
 if "Billing Addressee" in matched.columns:
     out_df["CustomerName"] = matched["Billing Addressee"]
     out_df["BillToName"] = matched["Billing Addressee"]
@@ -240,11 +206,8 @@ if "Shipping Address" in matched.columns:
     out_df["ShipToZip"] = parsed_ship.apply(lambda x: x[3])
     out_df["ShipToCountry"] = parsed_ship.apply(lambda x: x[4])
 
-if "Document Number" in matched.columns:
-    out_df["PONum"] = matched["Document Number"]
-
 # =========================================
-# Static Defaults
+# Defaults
 # =========================================
 out_df["TaxRateName"] = "None"
 out_df["CarrierName"] = "Will Call"
@@ -256,7 +219,7 @@ out_df["ShowItem"] = "TRUE"
 out_df["KitItem"] = "FALSE"
 
 # =========================================
-# Date Logic
+# Date
 # =========================================
 date_cols = [c for c in matched.columns if c.lower() in ["order date", "date created", "transaction date", "date"]]
 if date_cols:
@@ -279,14 +242,9 @@ def make_sonum(row):
 
 out_df["SONum"] = matched.apply(make_sonum, axis=1)
 
-# ProductDescription keeps full text
-if "Item" in matched.columns:
-    out_df["ProductDescription"] = matched["Item"]
-elif "Product Description" in matched.columns:
-    out_df["ProductDescription"] = matched["Product Description"]
-
-# Final column order
-out_df = out_df[FISHBOWL_COLUMNS]
+# PONum = Document Number
+if "Document Number" in matched.columns:
+    out_df["PONum"] = matched["Document Number"]
 
 # =========================================
 # Preview + Download
@@ -296,9 +254,4 @@ st.dataframe(out_df.head(100), use_container_width=True)
 
 csv_data = out_df.to_csv(index=False).encode("utf-8-sig")
 st.download_button("Download Fishbowl CSV", data=csv_data, file_name="fishbowl_upload.csv", mime="text/csv")
-
-# Debug mapping
-st.markdown("### 🔍 Column mapping used:")
-st.json(map_dict)
-
 
