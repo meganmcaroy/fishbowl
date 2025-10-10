@@ -165,7 +165,6 @@ def determine_product_number(row):
     sku = extract_after_colon(desc)
     if not sku:
         return ""
-    # Apply prefix rules
     if src == "UV":
         return dedupe_prefix(sku, "UV-")
     elif src == "CUSTOM":
@@ -180,7 +179,7 @@ matched["ProductNumber"] = matched.apply(determine_product_number, axis=1)
 # =========================================
 out_df = pd.DataFrame(columns=FISHBOWL_COLUMNS)
 
-# Fill known fields
+# Product fields
 out_df["ProductDescription"] = matched["Item"] if "Item" in matched.columns else matched["Product Description"]
 out_df["ProductNumber"] = matched["ProductNumber"]
 
@@ -207,14 +206,12 @@ if "Shipping Address" in matched.columns:
     out_df["ShipToCountry"] = parsed_ship.apply(lambda x: x[4])
 
 # =========================================
-# Defaults
+# Defaults (empty fields remain blank)
 # =========================================
-out_df["TaxRateName"] = "None"
 out_df["CarrierName"] = "Will Call"
 out_df["LocationGroupName"] = "Farm"
 out_df["Taxable"] = "FALSE"
 out_df["TaxCode"] = "NON"
-out_df["ItemQuickBooksClassName"] = "None"
 out_df["ShowItem"] = "TRUE"
 out_df["KitItem"] = "FALSE"
 
