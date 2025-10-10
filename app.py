@@ -8,7 +8,7 @@ from difflib import get_close_matches
 # =========================================
 st.set_page_config(page_title="Fishbowl Upload Transformer", layout="wide")
 st.title("Fishbowl Upload Transformer")
-st.caption("Transforms NetSuite + Asana data into a Fishbowl-ready CSV. Includes auto address parsing for BillTo fields.")
+st.caption("Transforms NetSuite + Asana data into a Fishbowl-ready CSV with full billing/shipping parsing and final field logic.")
 
 # =========================================
 # Live Google Sheet Links
@@ -115,9 +115,7 @@ def parse_address(full_address: str):
     match = ADDRESS_RE.search(text)
     if match:
         city, state, zip_code, country = match.groups()[0], match.groups()[1], match.groups()[2], match.groups()[3] or ""
-        # Rebuild BillToAddress minus duplicates
         return text, city.strip(), state.strip(), zip_code.strip(), country.strip()
-    # fallback — can't detect city/state/zip
     return text, "", "", "", ""
 
 # =========================================
@@ -203,13 +201,14 @@ for col in FISHBOWL_COLUMNS:
         out_df[col] = ""
 
 # =========================================
-# Override key billing fields from NetSuite
+# Override key billing and shipping fields
 # =========================================
 if "Billing Addressee" in matched.columns:
     out_df["CustomerName"] = matched["Billing Addressee"]
     out_df["BillToName"] = matched["Billing Addressee"]
+    out_df["ShipToName"] = matched["Billing Addressee"]
 
-# Parse BillToAddress → City, State, Zip, Country
+# BillToAddress parsing
 if "Billing Address" in matched.columns:
     parsed = matched["Billing Address"].apply(parse_address)
     out_df["BillToAddress"] = parsed.apply(lambda x: x[0])
@@ -218,8 +217,25 @@ if "Billing Address" in matched.columns:
     out_df["BillToZip"] = parsed.apply(lambda x: x[3])
     out_df["BillToCountry"] = parsed.apply(lambda x: x[4])
 
+# ShipToAddress parsing
+if "Shipping Address" in matched.columns:
+    parsed_ship = matched["Shipping Address"].apply(parse_address)
+    out_df["ShipToAddress"] = parsed_ship.apply(lambda x: x[0])
+    out_df["ShipToCity"] = parsed_ship.apply(lambda x: x[1])
+    out_df["ShipToState"] = parsed_ship.apply(lambda x: x[2])
+    out_df["ShipToZip"] = parsed_ship.apply(lambda x: x[3])
+    out_df["ShipToCountry"] = parsed_ship.apply(lambda x: x[4])
+
 # Fix SONum → use CUS number
 out_df["SONum"] = matched["_CUS"]
+
+# PONum → use Document Number (SO number)
+if "Document Number" in matched.columns:
+    out_df["PONum"] = matched["Document Number"]
+
+# Tax rate and carrier defaults
+out_df["TaxRateName"] = "None"
+out_df["CarrierName"] = "Will Call"
 
 # Copy ProductNumber
 out_df["ProductNumber"] = matched["ProductNumber"]
