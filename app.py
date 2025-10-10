@@ -8,7 +8,7 @@ from difflib import get_close_matches
 # =========================================
 st.set_page_config(page_title="Fishbowl Upload Transformer", layout="wide")
 st.title("Fishbowl Upload Transformer")
-st.caption("Transforms NetSuite + Asana data into a Fishbowl-ready CSV. Now with automatic header detection and fuzzy mapping for NetSuite columns.")
+st.caption("Transforms NetSuite + Asana data into a Fishbowl-ready CSV with full mapping, address fill, and SKU prefix logic.")
 
 # =========================================
 # Live Google Sheet Links
@@ -38,6 +38,13 @@ def normalize_key(s: str) -> str:
 def get_cus_from_asana_name(name: str) -> str:
     m = CUS_RE.search(str(name))
     return normalize_key(m.group(0)) if m else ""
+
+def extract_rhs(value):
+    """Extracts text after ':' if present"""
+    if not isinstance(value, str):
+        return str(value)
+    parts = value.split(":", 1)
+    return parts[1].strip() if len(parts) > 1 else value.strip()
 
 def is_automated_cards(row_dict: dict | None) -> bool:
     if not row_dict:
@@ -76,14 +83,13 @@ def fetch_asana(url):
         return pd.DataFrame()
 
 # =========================================
-# Column Mapping (flexible fuzzy version)
+# Expected field patterns
 # =========================================
 EXPECTED_KEYS = {
     "document number": "SONum",
     "status": "Status",
     "po/check number": "PONum",
     "customer": "CustomerName",
-    "customer name": "CustomerName",
     "bill to": "BillToName",
     "bill to address": "BillToAddress",
     "bill to city": "BillToCity",
@@ -108,6 +114,8 @@ EXPECTED_KEYS = {
 # =========================================
 # Fuzzy column matcher
 # =========================================
+from difflib import get_close_matches
+
 def fuzzy_map_columns(ns_cols):
     mapped = {}
     lower_ns = [c.lower().strip() for c in ns_cols]
@@ -165,7 +173,7 @@ if "PO/Check Number" not in ns_df.columns:
 
 ns_df["_CUS_KEY"] = ns_df["PO/Check Number"].apply(lambda x: re.sub(r"[^A-Za-z0-9]", "", str(x)).upper())
 asana_all["_CUS_KEY"] = asana_all["_CUS"].apply(lambda x: re.sub(r"[^A-Za-z0-9]", "", str(x)).upper())
-matched = ns_df.merge(asana_all[["_CUS_KEY", "_SRC"]], on="_CUS_KEY", how="inner")
+matched = ns_df.merge(asana_all[["_CUS_KEY", "_SRC", "_CUS"]], on="_CUS_KEY", how="inner")
 
 if matched.empty:
     st.warning("No NetSuite orders matched Asana CUS numbers. Ensure 'PO/Check Number' matches '#CUS#####' in Asana 'Name'.")
@@ -191,14 +199,27 @@ matched["ProductNumber"] = matched.apply(determine_sku, axis=1)
 map_dict = fuzzy_map_columns(matched.columns)
 out_df = pd.DataFrame()
 
+# Copy columns from mapping
 for src_col, fb_col in map_dict.items():
-    out_df[fb_col] = matched[src_col]
+    if src_col in matched.columns:
+        # Customer name special case: extract after ':'
+        if fb_col == "CustomerName":
+            out_df[fb_col] = matched[src_col].apply(extract_rhs)
+        else:
+            out_df[fb_col] = matched[src_col]
 
+# Fill missing Fishbowl columns
 for col in FISHBOWL_COLUMNS:
     if col not in out_df.columns:
         out_df[col] = ""
 
+# Fix SONum → use CUS number
+out_df["SONum"] = matched["_CUS"]
+
+# Copy ProductNumber
 out_df["ProductNumber"] = matched["ProductNumber"]
+
+# Final column order
 out_df = out_df[FISHBOWL_COLUMNS]
 
 # =========================================
@@ -210,7 +231,7 @@ st.dataframe(out_df.head(100), use_container_width=True)
 csv_data = out_df.to_csv(index=False).encode("utf-8-sig")
 st.download_button("Download Fishbowl CSV", data=csv_data, file_name="fishbowl_upload.csv", mime="text/csv")
 
-# Debug view
+# Debug mapping
 st.markdown("### 🔍 Column mapping used:")
 st.json(map_dict)
 
