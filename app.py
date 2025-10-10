@@ -67,13 +67,22 @@ def infer_order_type(uv_row: dict | None, custom_row: dict | None) -> str:
                 return "BLANK"
     return "LASER"
 
+# ✅ FIXED: NetSuite file reader (auto-detects separator)
 def read_ns(file):
     name = file.name.lower()
-    if name.endswith(".csv"):
-        return pd.read_csv(file, dtype=str).fillna("")
-    if name.endswith(".xlsx"):
-        return pd.read_excel(file, dtype=str, engine="openpyxl").fillna("")
-    return pd.read_excel(file, dtype=str, engine="xlrd").fillna("")
+    try:
+        # Try normal comma CSV first
+        df = pd.read_csv(file, dtype=str).fillna("")
+        # If only one column (bad parse), retry with tab delimiter
+        if df.shape[1] == 1:
+            file.seek(0)
+            df = pd.read_csv(file, dtype=str, sep="\t").fillna("")
+        return df
+    except Exception:
+        # Try Excel formats
+        if name.endswith(".xlsx"):
+            return pd.read_excel(file, dtype=str, engine="openpyxl").fillna("")
+        return pd.read_excel(file, dtype=str, engine="xlrd").fillna("")
 
 def fetch_asana(url: str):
     try:
@@ -128,7 +137,6 @@ asana_combined = asana_combined.drop_duplicates(subset="_CUS", keep="first")
 ns_df["PO/Check Number"] = ns_df["PO/Check Number"].astype(str).str.strip().str.upper()
 matched_orders = ns_df[ns_df["PO/Check Number"].isin(asana_combined["_CUS"])].copy()
 
-# Determine order type and adjust SKU
 results = []
 for _, row in matched_orders.iterrows():
     cus = row["PO/Check Number"]
