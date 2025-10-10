@@ -187,13 +187,13 @@ if matched.empty:
     st.stop()
 
 # =========================================
-# ProductNumber Logic (restored)
+# ProductNumber Logic
 # =========================================
 def determine_sku(row):
     item = row.get("Item") or row.get("Product Description") or ""
     src = row.get("_SRC", "")
     if not has_colon(item):
-        return item.strip()  # leave as-is for blank or simple items
+        return item.strip()  # leave as-is for non-custom SKUs
     rhs = extract_rhs_sku(item)
     if src == "UV":
         return dedupe_prefix(rhs, "UV-")
@@ -268,6 +268,32 @@ else:
 # SONum Logic
 # =========================================
 def make_sonum(row):
-    cus = row.get("_CUS",
+    cus = row.get("_CUS", "").strip()
+    sku = row.get("ProductNumber", "").strip().upper()
+    if sku.startswith("UV-"):
+        return f"UV {cus}"
+    elif sku.startswith("L-"):
+        return f"{cus}"
+    else:
+        return f"Blank {cus}"
+
+out_df["SONum"] = matched.apply(make_sonum, axis=1)
+
+# Final column order
+out_df = out_df[FISHBOWL_COLUMNS]
+
+# =========================================
+# Preview + Download
+# =========================================
+st.subheader("Preview (first 100 rows)")
+st.dataframe(out_df.head(100), use_container_width=True)
+
+csv_data = out_df.to_csv(index=False).encode("utf-8-sig")
+st.download_button("Download Fishbowl CSV", data=csv_data, file_name="fishbowl_upload.csv", mime="text/csv")
+
+# Debug mapping
+st.markdown("### 🔍 Column mapping used:")
+st.json(map_dict)
+
 
 
