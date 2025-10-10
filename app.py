@@ -7,7 +7,7 @@ import streamlit as st
 # -----------------------------
 st.set_page_config(page_title="Fishbowl Upload Transformer", layout="wide")
 st.title("Fishbowl Upload Transformer")
-st.caption("Transforms NetSuite + live Asana sheets into a Fishbowl-ready CSV. Keeps all Asana orders except 'Automated Cards' and applies UV/Laser/Blank SKU logic.")
+st.caption("Transforms NetSuite + Asana into a Fishbowl-ready CSV. Keeps all NetSuite data and applies UV/Laser/Blank SKU logic.")
 
 # -----------------------------
 # Live Google Sheet Links
@@ -39,14 +39,12 @@ def dedupe_prefix(sku: str, prefix: str) -> str:
     return sku if sku.upper().startswith(prefix.upper()) else f"{prefix}{sku}"
 
 def extract_rhs_sku(item_value: str) -> str:
-    """Take the SKU after ':' in NetSuite Item."""
     val = str(item_value or "").strip()
     if ":" in val:
         return val.split(":", 1)[1].strip()
     return val
 
 def get_cus_from_asana_name(name: str) -> str:
-    """Extract CUS##### from Asana Name column."""
     m = re.search(r"CUS\d{3,}", str(name))
     return m.group(0).upper() if m else ""
 
@@ -59,7 +57,6 @@ def is_automated_cards(asana_row: dict | None) -> bool:
     return False
 
 def infer_order_type(uv_row: dict | None, custom_row: dict | None) -> str:
-    """Determine order type with UV priority > Blank > Laser"""
     if uv_row:
         for k, v in uv_row.items():
             if normalize_col(k) == "colorprint" and "uv printer" in str(v).strip().lower():
@@ -80,8 +77,7 @@ def read_ns(file):
 
 def fetch_asana(url: str):
     try:
-        df = pd.read_csv(url, dtype=str).fillna("")
-        return df
+        return pd.read_csv(url, dtype=str).fillna("")
     except Exception as e:
         st.error(f"Could not fetch Asana sheet: {e}")
         return None
@@ -89,7 +85,7 @@ def fetch_asana(url: str):
 # -----------------------------
 # Load UI
 # -----------------------------
-col1, col2 = st.columns([1, 1])
+col1, col2 = st.columns([1,1])
 with col1:
     ns_file = st.file_uploader("Upload NetSuite export (.xls, .xlsx, .csv)", type=["xls","xlsx","csv"])
 with col2:
@@ -110,53 +106,52 @@ if uv_df is not None: st.info(f"UV Asana rows loaded: {len(uv_df):,}")
 if custom_df is not None: st.info(f"Custom/Laser Asana rows loaded: {len(custom_df):,}")
 
 # -----------------------------
-# Build usable Asana lists
+# Prepare Asana lists
 # -----------------------------
-def get_valid_asana_orders(df: pd.DataFrame) -> pd.DataFrame:
+def get_valid_asana_orders(df: pd.DataFrame):
     if df is None or "Name" not in df.columns:
         return pd.DataFrame()
     tmp = df.copy()
     tmp["_CUS"] = tmp["Name"].map(get_cus_from_asana_name)
     tmp = tmp[tmp["_CUS"] != ""]
     tmp["_AUTO"] = tmp.apply(lambda r: is_automated_cards(r.to_dict()), axis=1)
-    tmp = tmp[~tmp["_AUTO"]]  # exclude automated cards
-    return tmp
+    return tmp[~tmp["_AUTO"]]  # exclude automated cards
 
 uv_valid = get_valid_asana_orders(uv_df)
 custom_valid = get_valid_asana_orders(custom_df)
-
-# Combine both Asana lists (UV has priority)
 asana_combined = pd.concat([uv_valid.assign(_SRC="UV"), custom_valid.assign(_SRC="CUSTOM")])
 asana_combined = asana_combined.drop_duplicates(subset="_CUS", keep="first")
 
 # -----------------------------
-# Match Asana to NetSuite
+# Merge with NetSuite
 # -----------------------------
+ns_df["PO/Check Number"] = ns_df["PO/Check Number"].astype(str).str.strip().str.upper()
+matched_orders = ns_df[ns_df["PO/Check Number"].isin(asana_combined["_CUS"])].copy()
+
+# Determine order type and adjust SKU
 results = []
-for _, asana_row in asana_combined.iterrows():
-    cus = asana_row["_CUS"]
-    if not cus:
-        continue
+for _, row in matched_orders.iterrows():
+    cus = row["PO/Check Number"]
+    uv_row = uv_valid[uv_valid["_CUS"] == cus].to_dict("records")
+    custom_row = custom_valid[custom_valid["_CUS"] == cus].to_dict("records")
 
-    ns_matches = ns_df[ns_df["PO/Check Number"].astype(str).str.strip().str.upper() == cus]
-    if ns_matches.empty:
-        continue
+    uv_row = uv_row[0] if uv_row else None
+    custom_row = custom_row[0] if custom_row else None
 
-    for _, ns_row in ns_matches.iterrows():
-        order_type = "UV" if asana_row["_SRC"] == "UV" else infer_order_type(None, asana_row.to_dict())
-        r = ns_row.to_dict()
-        sku = extract_rhs_sku(r.get("Item", ""))
-        if order_type == "UV":
-            sku = dedupe_prefix(sku, "UV-")
-        elif order_type == "LASER":
-            sku = dedupe_prefix(sku, "L-")
-        r["ProductNumber"] = sku
-        r["__OrderType"] = order_type
-        results.append(r)
+    order_type = infer_order_type(uv_row, custom_row)
+    r = row.to_dict()
+    sku = extract_rhs_sku(r.get("Item", ""))
+    if order_type == "UV":
+        sku = dedupe_prefix(sku, "UV-")
+    elif order_type == "LASER":
+        sku = dedupe_prefix(sku, "L-")
+    r["ProductNumber"] = sku
+    r["__OrderType"] = order_type
+    results.append(r)
 
 out_df = pd.DataFrame(results)
 
-# Fill missing Fishbowl columns
+# Preserve all NetSuite data, reorder to Fishbowl columns
 for c in FISHBOWL_COLUMNS:
     if c not in out_df.columns:
         out_df[c] = ""
@@ -167,7 +162,7 @@ out_df = out_df.reindex(columns=FISHBOWL_COLUMNS + (["__OrderType"] if "__OrderT
 # -----------------------------
 st.subheader("Preview (first 100 rows)")
 if out_df.empty:
-    st.warning("No rows matched — check that your NetSuite PO/Check Number aligns with CUS# in Asana.")
+    st.warning("No rows matched after filtering — check Asana CUS# vs NetSuite PO/Check Number.")
 else:
     st.dataframe(out_df.head(100), use_container_width=True)
 
