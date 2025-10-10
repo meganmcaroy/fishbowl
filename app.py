@@ -8,7 +8,7 @@ from difflib import get_close_matches
 # =========================================
 st.set_page_config(page_title="Fishbowl Upload Transformer", layout="wide")
 st.title("Fishbowl Upload Transformer")
-st.caption("Transforms NetSuite + Asana data into a Fishbowl-ready CSV with full logic for SONum, SKU, address parsing, and defaults.")
+st.caption("Transforms NetSuite + Asana data into a Fishbowl-ready CSV with full SKU, SONum, address, and date logic.")
 
 # =========================================
 # Live Google Sheet Links
@@ -65,6 +65,16 @@ def extract_rhs_sku(item_value: str) -> str:
 def has_colon(item_value: str) -> bool:
     return ":" in str(item_value or "")
 
+def format_date(date_str):
+    """Convert to MM/DD/YYYY."""
+    try:
+        date = pd.to_datetime(date_str, errors="coerce")
+        if pd.notna(date):
+            return date.strftime("%m/%d/%Y")
+    except Exception:
+        pass
+    return ""
+
 def read_ns(file):
     try:
         df = pd.read_csv(file, dtype=str).fillna("")
@@ -112,9 +122,6 @@ def fuzzy_map_columns(ns_cols):
             mapped[found] = target
     return mapped
 
-# =========================================
-# Address parsing
-# =========================================
 def parse_address(full_address: str):
     """Try to split full address string into address, city, state, zip, country."""
     if not full_address:
@@ -125,19 +132,6 @@ def parse_address(full_address: str):
         city, state, zip_code, country = match.groups()[0], match.groups()[1], match.groups()[2], match.groups()[3] or ""
         return text, city.strip(), state.strip(), zip_code.strip(), country.strip()
     return text, "", "", "", ""
-
-# =========================================
-# Date formatting helper
-# =========================================
-def format_date(date_str):
-    """Convert any recognizable date string to MM/DD/YYYY format."""
-    try:
-        date = pd.to_datetime(date_str, errors="coerce")
-        if pd.notna(date):
-            return date.strftime("%m/%d/%Y")
-    except Exception:
-        pass
-    return ""
 
 # =========================================
 # UI
@@ -193,14 +187,13 @@ if matched.empty:
     st.stop()
 
 # =========================================
-# Apply SKU Prefix Logic
+# ProductNumber Logic (restored)
 # =========================================
 def determine_sku(row):
-    item = row.get("Item", "")
+    item = row.get("Item") or row.get("Product Description") or ""
     src = row.get("_SRC", "")
-    # if no colon → leave as-is
     if not has_colon(item):
-        return item.strip()
+        return item.strip()  # leave as-is for blank or simple items
     rhs = extract_rhs_sku(item)
     if src == "UV":
         return dedupe_prefix(rhs, "UV-")
@@ -215,25 +208,22 @@ matched["ProductNumber"] = matched.apply(determine_sku, axis=1)
 # =========================================
 map_dict = fuzzy_map_columns(matched.columns)
 out_df = pd.DataFrame()
-
 for src_col, fb_col in map_dict.items():
     if src_col in matched.columns:
         out_df[fb_col] = matched[src_col]
 
-# Fill missing Fishbowl columns
 for col in FISHBOWL_COLUMNS:
     if col not in out_df.columns:
         out_df[col] = ""
 
 # =========================================
-# Override key billing and shipping fields
+# Override key fields
 # =========================================
 if "Billing Addressee" in matched.columns:
     out_df["CustomerName"] = matched["Billing Addressee"]
     out_df["BillToName"] = matched["Billing Addressee"]
     out_df["ShipToName"] = matched["Billing Addressee"]
 
-# BillToAddress parsing
 if "Billing Address" in matched.columns:
     parsed = matched["Billing Address"].apply(parse_address)
     out_df["BillToAddress"] = parsed.apply(lambda x: x[0])
@@ -242,7 +232,6 @@ if "Billing Address" in matched.columns:
     out_df["BillToZip"] = parsed.apply(lambda x: x[3])
     out_df["BillToCountry"] = parsed.apply(lambda x: x[4])
 
-# ShipToAddress parsing
 if "Shipping Address" in matched.columns:
     parsed_ship = matched["Shipping Address"].apply(parse_address)
     out_df["ShipToAddress"] = parsed_ship.apply(lambda x: x[0])
@@ -251,12 +240,11 @@ if "Shipping Address" in matched.columns:
     out_df["ShipToZip"] = parsed_ship.apply(lambda x: x[3])
     out_df["ShipToCountry"] = parsed_ship.apply(lambda x: x[4])
 
-# PONum → use Document Number (SO number)
 if "Document Number" in matched.columns:
     out_df["PONum"] = matched["Document Number"]
 
 # =========================================
-# Static defaults
+# Static Defaults
 # =========================================
 out_df["TaxRateName"] = "None"
 out_df["CarrierName"] = "Will Call"
@@ -268,7 +256,7 @@ out_df["ShowItem"] = "TRUE"
 out_df["KitItem"] = "FALSE"
 
 # =========================================
-# Date Field Logic
+# Date Logic
 # =========================================
 date_cols = [c for c in matched.columns if c.lower() in ["order date", "date created", "transaction date", "date"]]
 if date_cols:
@@ -277,34 +265,9 @@ else:
     out_df["Date"] = ""
 
 # =========================================
-# SONum Logic — prefix based on SKU
+# SONum Logic
 # =========================================
 def make_sonum(row):
-    cus = row.get("_CUS", "").strip()
-    sku = row.get("ProductNumber", "").strip().upper()
-    if sku.startswith("UV-"):
-        return f"UV {cus}"
-    elif sku.startswith("L-"):
-        return f"{cus}"
-    else:
-        return f"Blank {cus}"
-
-out_df["SONum"] = matched.apply(make_sonum, axis=1)
-
-# Final column order
-out_df = out_df[FISHBOWL_COLUMNS]
-
-# =========================================
-# Preview + Download
-# =========================================
-st.subheader("Preview (first 100 rows)")
-st.dataframe(out_df.head(100), use_container_width=True)
-
-csv_data = out_df.to_csv(index=False).encode("utf-8-sig")
-st.download_button("Download Fishbowl CSV", data=csv_data, file_name="fishbowl_upload.csv", mime="text/csv")
-
-# Debug mapping
-st.markdown("### 🔍 Column mapping used:")
-st.json(map_dict)
+    cus = row.get("_CUS",
 
 
