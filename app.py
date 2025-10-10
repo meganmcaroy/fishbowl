@@ -154,14 +154,23 @@ if matched.empty:
     st.stop()
 
 # =========================================
-# ProductNumber Logic
+# ProductNumber Logic (No colon = no prefix)
 # =========================================
 def determine_product_number(row):
     desc = row.get("Item") or row.get("Product Description") or ""
     src = row.get("_SRC", "")
+    desc = str(desc).strip()
+
+    # If there’s no colon, return as-is (no prefix)
+    if ":" not in desc:
+        return desc.upper()
+
+    # Extract part after colon
     sku = extract_after_colon(desc)
     if not sku:
         return ""
+
+    # Apply prefix if there is a colon
     if src == "UV":
         return dedupe_prefix(sku, "UV-")
     elif src == "CUSTOM":
@@ -249,5 +258,3 @@ st.dataframe(out_df.head(100), use_container_width=True)
 
 csv_data = out_df.to_csv(index=False).encode("utf-8-sig")
 st.download_button("Download Fishbowl CSV", data=csv_data, file_name="fishbowl_upload.csv", mime="text/csv")
-
-
