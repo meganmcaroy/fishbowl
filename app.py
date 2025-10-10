@@ -8,7 +8,7 @@ from difflib import get_close_matches
 # =========================================
 st.set_page_config(page_title="Fishbowl Upload Transformer", layout="wide")
 st.title("Fishbowl Upload Transformer")
-st.caption("Transforms NetSuite + Asana data into a Fishbowl-ready CSV with full mapping, address fill, and SKU prefix logic.")
+st.caption("Transforms NetSuite + Asana data into a Fishbowl-ready CSV with full customer, billing, and address mapping.")
 
 # =========================================
 # Live Google Sheet Links
@@ -38,13 +38,6 @@ def normalize_key(s: str) -> str:
 def get_cus_from_asana_name(name: str) -> str:
     m = CUS_RE.search(str(name))
     return normalize_key(m.group(0)) if m else ""
-
-def extract_rhs(value):
-    """Extracts text after ':' if present"""
-    if not isinstance(value, str):
-        return str(value)
-    parts = value.split(":", 1)
-    return parts[1].strip() if len(parts) > 1 else value.strip()
 
 def is_automated_cards(row_dict: dict | None) -> bool:
     if not row_dict:
@@ -89,8 +82,6 @@ EXPECTED_KEYS = {
     "document number": "SONum",
     "status": "Status",
     "po/check number": "PONum",
-    "customer": "CustomerName",
-    "bill to": "BillToName",
     "bill to address": "BillToAddress",
     "bill to city": "BillToCity",
     "bill to state": "BillToState",
@@ -199,19 +190,24 @@ matched["ProductNumber"] = matched.apply(determine_sku, axis=1)
 map_dict = fuzzy_map_columns(matched.columns)
 out_df = pd.DataFrame()
 
-# Copy columns from mapping
 for src_col, fb_col in map_dict.items():
     if src_col in matched.columns:
-        # Customer name special case: extract after ':'
-        if fb_col == "CustomerName":
-            out_df[fb_col] = matched[src_col].apply(extract_rhs)
-        else:
-            out_df[fb_col] = matched[src_col]
+        out_df[fb_col] = matched[src_col]
 
 # Fill missing Fishbowl columns
 for col in FISHBOWL_COLUMNS:
     if col not in out_df.columns:
         out_df[col] = ""
+
+# =========================================
+# Override critical fields with correct NetSuite sources
+# =========================================
+if "Billing Addressee" in matched.columns:
+    out_df["CustomerName"] = matched["Billing Addressee"]
+    out_df["BillToName"] = matched["Billing Addressee"]
+
+if "Billing City" in matched.columns:
+    out_df["BillToCity"] = matched["Billing City"]
 
 # Fix SONum → use CUS number
 out_df["SONum"] = matched["_CUS"]
