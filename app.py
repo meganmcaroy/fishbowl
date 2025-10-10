@@ -8,7 +8,7 @@ from difflib import get_close_matches
 # =========================================
 st.set_page_config(page_title="Fishbowl Upload Transformer", layout="wide")
 st.title("Fishbowl Upload Transformer")
-st.caption("Transforms NetSuite + Asana data into a Fishbowl-ready CSV with full customer, billing, and address mapping.")
+st.caption("Transforms NetSuite + Asana data into a Fishbowl-ready CSV. Includes auto address parsing for BillTo fields.")
 
 # =========================================
 # Live Google Sheet Links
@@ -31,6 +31,7 @@ FISHBOWL_COLUMNS = [
 # Helper functions
 # =========================================
 CUS_RE = re.compile(r"CUS\d{3,}", re.IGNORECASE)
+ADDRESS_RE = re.compile(r'([\w\s]+)\s+([A-Z]{2})\s+(\d{5})(?:[-\d]*)?\s*(.*)?$')
 
 def normalize_key(s: str) -> str:
     return str(s or "").strip().upper()
@@ -76,23 +77,14 @@ def fetch_asana(url):
         return pd.DataFrame()
 
 # =========================================
-# Expected field patterns
+# Fuzzy column matcher
 # =========================================
 EXPECTED_KEYS = {
     "document number": "SONum",
     "status": "Status",
     "po/check number": "PONum",
     "bill to address": "BillToAddress",
-    "bill to city": "BillToCity",
-    "bill to state": "BillToState",
-    "bill to zip": "BillToZip",
-    "bill to country": "BillToCountry",
-    "ship to": "ShipToName",
     "ship to address": "ShipToAddress",
-    "ship to city": "ShipToCity",
-    "ship to state": "ShipToState",
-    "ship to zip": "ShipToZip",
-    "ship to country": "ShipToCountry",
     "sales rep": "Salesman",
     "order date": "Date",
     "item": "ProductDescription",
@@ -101,11 +93,6 @@ EXPECTED_KEYS = {
     "phone": "Phone",
     "email": "Email"
 }
-
-# =========================================
-# Fuzzy column matcher
-# =========================================
-from difflib import get_close_matches
 
 def fuzzy_map_columns(ns_cols):
     mapped = {}
@@ -116,6 +103,22 @@ def fuzzy_map_columns(ns_cols):
             found = ns_cols[lower_ns.index(matches[0])]
             mapped[found] = target
     return mapped
+
+# =========================================
+# Address parsing
+# =========================================
+def parse_address(full_address: str):
+    """Try to split full address string into address, city, state, zip, country."""
+    if not full_address:
+        return "", "", "", "", ""
+    text = " ".join(str(full_address).split())
+    match = ADDRESS_RE.search(text)
+    if match:
+        city, state, zip_code, country = match.groups()[0], match.groups()[1], match.groups()[2], match.groups()[3] or ""
+        # Rebuild BillToAddress minus duplicates
+        return text, city.strip(), state.strip(), zip_code.strip(), country.strip()
+    # fallback — can't detect city/state/zip
+    return text, "", "", "", ""
 
 # =========================================
 # UI
@@ -200,14 +203,20 @@ for col in FISHBOWL_COLUMNS:
         out_df[col] = ""
 
 # =========================================
-# Override critical fields with correct NetSuite sources
+# Override key billing fields from NetSuite
 # =========================================
 if "Billing Addressee" in matched.columns:
     out_df["CustomerName"] = matched["Billing Addressee"]
     out_df["BillToName"] = matched["Billing Addressee"]
 
-if "Billing City" in matched.columns:
-    out_df["BillToCity"] = matched["Billing City"]
+# Parse BillToAddress → City, State, Zip, Country
+if "Billing Address" in matched.columns:
+    parsed = matched["Billing Address"].apply(parse_address)
+    out_df["BillToAddress"] = parsed.apply(lambda x: x[0])
+    out_df["BillToCity"] = parsed.apply(lambda x: x[1])
+    out_df["BillToState"] = parsed.apply(lambda x: x[2])
+    out_df["BillToZip"] = parsed.apply(lambda x: x[3])
+    out_df["BillToCountry"] = parsed.apply(lambda x: x[4])
 
 # Fix SONum → use CUS number
 out_df["SONum"] = matched["_CUS"]
