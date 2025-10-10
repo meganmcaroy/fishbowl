@@ -62,9 +62,6 @@ def extract_after_colon(text: str) -> str:
         return text.split(":", 1)[1].strip().upper()
     return text.upper()
 
-def has_colon(item_value: str) -> bool:
-    return ":" in str(item_value or "")
-
 def format_date(date_str):
     """Convert to MM/DD/YYYY."""
     try:
@@ -206,8 +203,9 @@ if "Shipping Address" in matched.columns:
     out_df["ShipToCountry"] = parsed_ship.apply(lambda x: x[4])
 
 # =========================================
-# Defaults (empty fields remain blank)
+# Defaults (Status = 20)
 # =========================================
+out_df["Status"] = "20"
 out_df["CarrierName"] = "Will Call"
 out_df["LocationGroupName"] = "Farm"
 out_df["Taxable"] = "FALSE"
@@ -251,4 +249,5 @@ st.dataframe(out_df.head(100), use_container_width=True)
 
 csv_data = out_df.to_csv(index=False).encode("utf-8-sig")
 st.download_button("Download Fishbowl CSV", data=csv_data, file_name="fishbowl_upload.csv", mime="text/csv")
+
 
