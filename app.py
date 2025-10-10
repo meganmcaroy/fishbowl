@@ -93,6 +93,8 @@ EXPECTED_KEYS = {
     "ship to address": "ShipToAddress",
     "sales rep": "Salesman",
     "order date": "Date",
+    "date created": "Date",
+    "transaction date": "Date",
     "item": "ProductDescription",
     "quantity": "ProductQuantity",
     "price": "ProductPrice",
@@ -123,6 +125,19 @@ def parse_address(full_address: str):
         city, state, zip_code, country = match.groups()[0], match.groups()[1], match.groups()[2], match.groups()[3] or ""
         return text, city.strip(), state.strip(), zip_code.strip(), country.strip()
     return text, "", "", "", ""
+
+# =========================================
+# Date formatting helper
+# =========================================
+def format_date(date_str):
+    """Convert any recognizable date string to MM/DD/YYYY format."""
+    try:
+        date = pd.to_datetime(date_str, errors="coerce")
+        if pd.notna(date):
+            return date.strftime("%m/%d/%Y")
+    except Exception:
+        pass
+    return ""
 
 # =========================================
 # UI
@@ -178,7 +193,7 @@ if matched.empty:
     st.stop()
 
 # =========================================
-# Apply SKU Prefix Logic (final)
+# Apply SKU Prefix Logic
 # =========================================
 def determine_sku(row):
     item = row.get("Item", "")
@@ -251,6 +266,15 @@ out_df["TaxCode"] = "NON"
 out_df["ItemQuickBooksClassName"] = "None"
 out_df["ShowItem"] = "TRUE"
 out_df["KitItem"] = "FALSE"
+
+# =========================================
+# Date Field Logic
+# =========================================
+date_cols = [c for c in matched.columns if c.lower() in ["order date", "date created", "transaction date", "date"]]
+if date_cols:
+    out_df["Date"] = matched[date_cols[0]].apply(format_date)
+else:
+    out_df["Date"] = ""
 
 # =========================================
 # SONum Logic — prefix based on SKU
