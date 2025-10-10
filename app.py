@@ -7,7 +7,7 @@ import streamlit as st
 # =========================================
 st.set_page_config(page_title="Fishbowl Upload Transformer", layout="wide")
 st.title("Fishbowl Upload Transformer")
-st.caption("Keeps all NetSuite fields, merges Asana matches, applies SKU logic, and outputs Fishbowl-ready CSV.")
+st.caption("Transforms NetSuite + Asana into a Fishbowl-ready CSV. Matches NetSuite 'PO/Check Number' to Asana '#CUS#####' in 'Name' column.")
 
 # =========================================
 # Live Google Sheet Links
@@ -16,7 +16,7 @@ UV_SHEET_CSV = "https://docs.google.com/spreadsheets/d/1Bgw_knhlQcdO2D2LTfJy3XB9
 CUSTOM_SHEET_CSV = "https://docs.google.com/spreadsheets/d/1vJztlcMoXhdZxJdcXYkvFHYqSpYHq4PILMYT0BS_8Hk/export?format=csv&gid=1818164620"
 
 # =========================================
-# Fishbowl Column Order
+# Fishbowl Columns
 # =========================================
 FISHBOWL_COLUMNS = [
     'SONum','Status','CustomerName','CustomerContact','BillToName','BillToAddress','BillToCity','BillToState','BillToZip','BillToCountry',
@@ -27,7 +27,7 @@ FISHBOWL_COLUMNS = [
 ]
 
 # =========================================
-# Helper functions
+# Helper Functions
 # =========================================
 CUS_RE = re.compile(r"CUS\d{3,}", re.IGNORECASE)
 
@@ -57,17 +57,6 @@ def extract_rhs_sku(item_value: str) -> str:
     val = str(item_value or "").strip()
     return val.split(":", 1)[1].strip() if ":" in val else val
 
-def infer_order_type(uv_row: dict | None, custom_row: dict | None) -> str:
-    if uv_row:
-        for k, v in uv_row.items():
-            if re.sub(r"\s+", "", str(k).strip().lower()) == "colorprint" and "uv printer" in str(v).strip().lower():
-                return "UV"
-    if custom_row:
-        for k, v in custom_row.items():
-            if re.sub(r"\s+|[/_]", "", str(k).strip().lower()) in {"section","sectioncolumn","column"} and str(v).strip().lower() == "blank":
-                return "BLANK"
-    return "LASER"
-
 def read_ns(file):
     name = file.name.lower()
     try:
@@ -92,13 +81,13 @@ def fetch_asana(url):
         return pd.DataFrame()
 
 # =========================================
-# Load UI
+# UI
 # =========================================
-col1, col2 = st.columns([1, 1])
+col1, col2 = st.columns([1,1])
 with col1:
-    ns_file = st.file_uploader("Upload NetSuite export (.xls, .xlsx, .csv)", type=["xls", "xlsx", "csv"])
+    ns_file = st.file_uploader("Upload NetSuite export (.xls, .xlsx, .csv)", type=["xls","xlsx","csv"])
 with col2:
-    st.markdown("**Asana sheets** are pulled live automatically (UV + Custom).")
+    st.markdown("**Asana sheets** are pulled live (UV + Custom).")
 
 if not ns_file:
     st.stop()
@@ -112,23 +101,26 @@ ns_df.columns = [str(c).strip().replace('"','').replace("'", "") for c in ns_df.
 uv_df = fetch_asana(UV_SHEET_CSV)
 custom_df = fetch_asana(CUSTOM_SHEET_CSV)
 
-# Confirm core fields exist
-for col in ["Document Number", "Item"]:
-    if col not in ns_df.columns:
-        st.error(f"Missing '{col}' column in NetSuite file.")
-        st.stop()
+# Confirm key fields exist
+if "PO/Check Number" not in ns_df.columns:
+    st.error("Missing 'PO/Check Number' column in NetSuite file.")
+    st.stop()
+
+if "Item" not in ns_df.columns:
+    st.error("Missing 'Item' column in NetSuite file.")
+    st.stop()
 
 # =========================================
-# Prep Asana Data
+# Prepare Asana data
 # =========================================
-def prep_asana(df, source_label):
+def prep_asana(df, source):
     if df.empty or "Name" not in df.columns:
         return pd.DataFrame()
     df["_CUS"] = df["Name"].map(get_cus_from_asana_name)
     df = df[df["_CUS"] != ""]
     df["_AUTO"] = df.apply(lambda r: is_automated_cards(r.to_dict()), axis=1)
     df = df[~df["_AUTO"]]
-    df["_SRC"] = source_label
+    df["_SRC"] = source
     return df
 
 uv_valid = prep_asana(uv_df, "UV")
@@ -138,19 +130,19 @@ asana_all = pd.concat([uv_valid, custom_valid], ignore_index=True)
 asana_all = asana_all.sort_values(by=["_SRC"], key=lambda s: s.map({"UV":0,"CUSTOM":1})).drop_duplicates(subset="_CUS", keep="first")
 
 # =========================================
-# Match by CUS number in Document Number
+# Match by PO/Check Number (NetSuite) → Name (Asana)
 # =========================================
-ns_df["_CUS_KEY"] = ns_df["Document Number"].apply(lambda x: normalize_key(x))
-ns_df["_CUS_KEY"] = ns_df["_CUS_KEY"].apply(lambda x: "CUS" + re.findall(r"CUS(\d+)", x)[0] if "CUS" in x else x)
+ns_df["_CUS_KEY"] = ns_df["PO/Check Number"].apply(lambda x: re.sub(r"[^A-Za-z0-9]", "", str(x)).upper())
+asana_all["_CUS_KEY"] = asana_all["_CUS"].apply(lambda x: re.sub(r"[^A-Za-z0-9]", "", str(x)).upper())
 
-matched = ns_df.merge(asana_all[["_CUS", "_SRC"]], left_on="_CUS_KEY", right_on="_CUS", how="inner")
+matched = ns_df.merge(asana_all[["_CUS_KEY", "_SRC"]], on="_CUS_KEY", how="inner")
 
 if matched.empty:
-    st.warning("No NetSuite orders matched Asana CUS numbers. Ensure 'Document Number' contains the CUS##### value.")
+    st.warning("No NetSuite orders matched Asana CUS numbers. Ensure 'PO/Check Number' matches the '#CUS#####' in Asana 'Name'.")
     st.stop()
 
 # =========================================
-# Apply SKU Prefix Rules
+# Apply SKU Prefix
 # =========================================
 def determine_sku(row):
     rhs = extract_rhs_sku(row.get("Item", ""))
@@ -158,10 +150,9 @@ def determine_sku(row):
     if src == "UV":
         return dedupe_prefix(rhs, "UV-")
     elif src == "CUSTOM":
-        # Check blank
         cus = row.get("_CUS_KEY", "")
         if not custom_df.empty:
-            match = custom_df[custom_df["Name"].str.contains(cus, na=False, case=False)]
+            match = custom_df[custom_df["_CUS_KEY"].str.contains(cus, na=False, case=False)] if "_CUS_KEY" in custom_df.columns else custom_df
             if not match.empty:
                 for c in match.columns:
                     if re.sub(r"\s+|[/_]", "", str(c).lower()) in {"section","sectioncolumn","column"}:
@@ -173,12 +164,12 @@ def determine_sku(row):
 matched["ProductNumber"] = matched.apply(determine_sku, axis=1)
 
 # =========================================
-# Fill missing Fishbowl columns & reorder
+# Fill all columns, preserve NetSuite data
 # =========================================
 out_df = matched.copy()
-for col in FISHBOWL_COLUMNS:
-    if col not in out_df.columns:
-        out_df[col] = ""
+for c in FISHBOWL_COLUMNS:
+    if c not in out_df.columns:
+        out_df[c] = ""
 
 out_df = out_df.reindex(columns=FISHBOWL_COLUMNS)
 
@@ -190,6 +181,5 @@ st.dataframe(out_df.head(100), use_container_width=True)
 
 csv_data = out_df.to_csv(index=False).encode("utf-8-sig")
 st.download_button("Download Fishbowl CSV", data=csv_data, file_name="fishbowl_upload.csv", mime="text/csv")
-
 
 
