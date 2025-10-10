@@ -8,7 +8,7 @@ from difflib import get_close_matches
 # =========================================
 st.set_page_config(page_title="Fishbowl Upload Transformer", layout="wide")
 st.title("Fishbowl Upload Transformer")
-st.caption("Transforms NetSuite + Asana data into a Fishbowl-ready CSV with correct SONum, SKU, and address logic.")
+st.caption("Transforms NetSuite + Asana data into a Fishbowl-ready CSV with full logic for SONum, SKU, address parsing, and defaults.")
 
 # =========================================
 # Live Google Sheet Links
@@ -240,17 +240,17 @@ if "Shipping Address" in matched.columns:
 if "Document Number" in matched.columns:
     out_df["PONum"] = matched["Document Number"]
 
-# Tax rate, carrier, and item defaults
+# =========================================
+# Static defaults
+# =========================================
 out_df["TaxRateName"] = "None"
 out_df["CarrierName"] = "Will Call"
+out_df["LocationGroupName"] = "Farm"
 out_df["Taxable"] = "FALSE"
 out_df["TaxCode"] = "NON"
 out_df["ItemQuickBooksClassName"] = "None"
 out_df["ShowItem"] = "TRUE"
 out_df["KitItem"] = "FALSE"
-
-# Product number
-out_df["ProductNumber"] = matched["ProductNumber"]
 
 # =========================================
 # SONum Logic — prefix based on SKU
