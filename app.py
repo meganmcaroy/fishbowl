@@ -8,7 +8,7 @@ from difflib import get_close_matches
 # =========================================
 st.set_page_config(page_title="Fishbowl Upload Transformer", layout="wide")
 st.title("Fishbowl Upload Transformer")
-st.caption("Transforms NetSuite + Asana data into a Fishbowl-ready CSV with full billing/shipping parsing and final SONum logic.")
+st.caption("Transforms NetSuite + Asana data into a Fishbowl-ready CSV with correct SONum, SKU, and address logic.")
 
 # =========================================
 # Live Google Sheet Links
@@ -56,8 +56,14 @@ def dedupe_prefix(sku: str, prefix: str) -> str:
     return sku if sku.upper().startswith(prefix.upper()) else f"{prefix}{sku}"
 
 def extract_rhs_sku(item_value: str) -> str:
+    """Return the part after ':' if present, otherwise the full value."""
     val = str(item_value or "").strip()
-    return val.split(":", 1)[1].strip() if ":" in val else val
+    if ":" in val:
+        return val.split(":", 1)[1].strip()
+    return val
+
+def has_colon(item_value: str) -> bool:
+    return ":" in str(item_value or "")
 
 def read_ns(file):
     try:
@@ -172,11 +178,15 @@ if matched.empty:
     st.stop()
 
 # =========================================
-# Apply SKU Prefix Logic
+# Apply SKU Prefix Logic (final)
 # =========================================
 def determine_sku(row):
-    rhs = extract_rhs_sku(row.get("Item", ""))
+    item = row.get("Item", "")
     src = row.get("_SRC", "")
+    # if no colon → leave as-is
+    if not has_colon(item):
+        return item.strip()
+    rhs = extract_rhs_sku(item)
     if src == "UV":
         return dedupe_prefix(rhs, "UV-")
     elif src == "CUSTOM":
@@ -272,4 +282,5 @@ st.download_button("Download Fishbowl CSV", data=csv_data, file_name="fishbowl_u
 # Debug mapping
 st.markdown("### 🔍 Column mapping used:")
 st.json(map_dict)
+
 
