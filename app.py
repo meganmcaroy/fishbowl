@@ -188,7 +188,7 @@ out_df = pd.DataFrame(columns=FISHBOWL_COLUMNS)
 out_df["ProductDescription"] = matched["Item"] if "Item" in matched.columns else matched["Product Description"]
 out_df["ProductNumber"] = matched["ProductNumber"]
 
-# 🟢 ProductQuantity comes from NetSuite “Quantity” or “Quanity”
+# ProductQuantity from NetSuite
 if "Quantity" in matched.columns:
     out_df["ProductQuantity"] = matched["Quantity"]
 elif "Quanity" in matched.columns:
@@ -224,6 +224,8 @@ out_df["CarrierName"] = "Will Call"
 out_df["LocationGroupName"] = "Farm"
 out_df["Taxable"] = "FALSE"
 out_df["TaxCode"] = "NON"
+out_df["TaxRateName"] = "None"       # ✅ NEW LINE
+out_df["PriorityId"] = "30"          # ✅ NEW LINE
 out_df["ShowItem"] = "TRUE"
 out_df["KitItem"] = "FALSE"
 
@@ -263,4 +265,5 @@ st.dataframe(out_df.head(100), use_container_width=True)
 
 csv_data = out_df.to_csv(index=False).encode("utf-8-sig")
 st.download_button("Download Fishbowl CSV", data=csv_data, file_name="fishbowl_upload.csv", mime="text/csv")
+
 
