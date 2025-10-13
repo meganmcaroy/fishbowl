@@ -146,7 +146,7 @@ if "PO/Check Number" not in ns_df.columns:
 
 ns_df["_CUS_KEY"] = ns_df["PO/Check Number"].apply(lambda x: re.sub(r"[^A-Za-z0-9]", "", str(x)).upper())
 asana_all["_CUS_KEY"] = asana_all["_CUS"].apply(lambda x: re.sub(r"[^A-Za-z0-9]", "", str(x)).upper())
-matched = ns_df.merge(asana_all[["_CUS_KEY", "_SRC", "_CUS", "Quantity"]], on="_CUS_KEY", how="inner")
+matched = ns_df.merge(asana_all[["_CUS_KEY", "_SRC", "_CUS"]], on="_CUS_KEY", how="inner")
 
 if matched.empty:
     st.warning("No NetSuite orders matched Asana CUS numbers. Ensure 'PO/Check Number' matches '#CUS#####' in Asana 'Name'.")
@@ -188,9 +188,11 @@ out_df = pd.DataFrame(columns=FISHBOWL_COLUMNS)
 out_df["ProductDescription"] = matched["Item"] if "Item" in matched.columns else matched["Product Description"]
 out_df["ProductNumber"] = matched["ProductNumber"]
 
-# 🟢 Add quantity from Asana if available
+# 🟢 ProductQuantity comes from NetSuite “Quantity” or “Quanity”
 if "Quantity" in matched.columns:
     out_df["ProductQuantity"] = matched["Quantity"]
+elif "Quanity" in matched.columns:
+    out_df["ProductQuantity"] = matched["Quanity"]
 
 # Billing info
 if "Billing Addressee" in matched.columns:
