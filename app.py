@@ -146,7 +146,13 @@ if "PO/Check Number" not in ns_df.columns:
 
 ns_df["_CUS_KEY"] = ns_df["PO/Check Number"].apply(lambda x: re.sub(r"[^A-Za-z0-9]", "", str(x)).upper())
 asana_all["_CUS_KEY"] = asana_all["_CUS"].apply(lambda x: re.sub(r"[^A-Za-z0-9]", "", str(x)).upper())
-matched = ns_df.merge(asana_all[["_CUS_KEY", "_SRC", "_CUS"]], on="_CUS_KEY", how="inner")
+
+# 🟢 Include Due Date from Asana in the merge
+columns_to_merge = ["_CUS_KEY", "_SRC", "_CUS"]
+if "Due Date" in asana_all.columns:
+    columns_to_merge.append("Due Date")
+
+matched = ns_df.merge(asana_all[columns_to_merge], on="_CUS_KEY", how="inner")
 
 if matched.empty:
     st.warning("No NetSuite orders matched Asana CUS numbers. Ensure 'PO/Check Number' matches '#CUS#####' in Asana 'Name'.")
@@ -194,6 +200,10 @@ if "Quantity" in matched.columns:
 elif "Quanity" in matched.columns:
     out_df["ProductQuantity"] = matched["Quanity"]
 
+# 🟢 CF-Due Date from Asana
+if "Due Date" in matched.columns:
+    out_df["CF-Due Date"] = matched["Due Date"]
+
 # Billing info
 if "Billing Addressee" in matched.columns:
     out_df["CustomerName"] = matched["Billing Addressee"]
@@ -224,8 +234,8 @@ out_df["CarrierName"] = "Will Call"
 out_df["LocationGroupName"] = "Farm"
 out_df["Taxable"] = "FALSE"
 out_df["TaxCode"] = "NON"
-out_df["TaxRateName"] = "None"       # ✅ NEW LINE
-out_df["PriorityId"] = "30"          # ✅ NEW LINE
+out_df["TaxRateName"] = "None"
+out_df["PriorityId"] = "30"
 out_df["ShowItem"] = "TRUE"
 out_df["KitItem"] = "FALSE"
 
@@ -265,5 +275,6 @@ st.dataframe(out_df.head(100), use_container_width=True)
 
 csv_data = out_df.to_csv(index=False).encode("utf-8-sig")
 st.download_button("Download Fishbowl CSV", data=csv_data, file_name="fishbowl_upload.csv", mime="text/csv")
+
 
 
