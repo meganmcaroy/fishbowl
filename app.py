@@ -7,7 +7,7 @@ import streamlit as st
 # =========================================
 st.set_page_config(page_title="Fishbowl Upload Transformer", layout="wide")
 st.title("Fishbowl Upload Transformer")
-st.caption("Transforms NetSuite + Asana data into a Fishbowl-ready CSV with full SKU, SONum, address, and date logic.")
+st.caption("Transforms NetSuite + Asana data into a Fishbowl-ready CSV with full SKU, SONum, Due Date, and filtering logic.")
 
 # =========================================
 # Live Google Sheet Links
@@ -147,7 +147,7 @@ if "PO/Check Number" not in ns_df.columns:
 ns_df["_CUS_KEY"] = ns_df["PO/Check Number"].apply(lambda x: re.sub(r"[^A-Za-z0-9]", "", str(x)).upper())
 asana_all["_CUS_KEY"] = asana_all["_CUS"].apply(lambda x: re.sub(r"[^A-Za-z0-9]", "", str(x)).upper())
 
-# 🟢 Include Due Date from Asana in the merge
+# Include Due Date from Asana in the merge
 columns_to_merge = ["_CUS_KEY", "_SRC", "_CUS"]
 if "Due Date" in asana_all.columns:
     columns_to_merge.append("Due Date")
@@ -159,23 +159,25 @@ if matched.empty:
     st.stop()
 
 # =========================================
+# 🧹 Filter out “Shopify Shipping Charge”
+# =========================================
+if "Item" in matched.columns:
+    matched = matched[~matched["Item"].str.contains("shopify shipping charge", case=False, na=False)]
+elif "Product Description" in matched.columns:
+    matched = matched[~matched["Product Description"].str.contains("shopify shipping charge", case=False, na=False)]
+
+# =========================================
 # ProductNumber Logic (No colon = no prefix)
 # =========================================
 def determine_product_number(row):
     desc = row.get("Item") or row.get("Product Description") or ""
     src = row.get("_SRC", "")
     desc = str(desc).strip()
-
-    # If there’s no colon, return as-is (no prefix)
     if ":" not in desc:
         return desc.upper()
-
-    # Extract part after colon
     sku = extract_after_colon(desc)
     if not sku:
         return ""
-
-    # Apply prefix if there is a colon
     if src == "UV":
         return dedupe_prefix(sku, "UV-")
     elif src == "CUSTOM":
@@ -200,7 +202,7 @@ if "Quantity" in matched.columns:
 elif "Quanity" in matched.columns:
     out_df["ProductQuantity"] = matched["Quanity"]
 
-# 🟢 CF-Due Date from Asana
+# CF-Due Date from Asana
 if "Due Date" in matched.columns:
     out_df["CF-Due Date"] = matched["Due Date"]
 
