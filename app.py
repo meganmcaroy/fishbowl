@@ -122,7 +122,7 @@ with col1:
 with col2:
     if st.button("🔄 Refresh Asana Data"):
         st.cache_data.clear()
-        st.experimental_rerun()
+        st.rerun()
     st.markdown("**Asana sheets** are pulled live (UV + Custom).")
 
 if not ns_file:
