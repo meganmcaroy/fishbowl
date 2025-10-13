@@ -75,15 +75,22 @@ def format_date(date_str):
         pass
     return ""
 
+# 🟢 Improved file reader: now fully supports .xls, .xlsx, .csv
 def read_ns(file):
     try:
-        df = pd.read_csv(file, dtype=str).fillna("")
-        if df.shape[1] == 1:
-            file.seek(0)
-            df = pd.read_csv(file, dtype=str, sep="\t").fillna("")
+        filename = file.name.lower()
+        if filename.endswith(".csv"):
+            df = pd.read_csv(file, dtype=str).fillna("")
+        elif filename.endswith(".xlsx"):
+            df = pd.read_excel(file, dtype=str, engine="openpyxl").fillna("")
+        elif filename.endswith(".xls"):
+            df = pd.read_excel(file, dtype=str, engine="xlrd").fillna("")
+        else:
+            raise ValueError("Unsupported file type. Please upload .csv, .xls, or .xlsx.")
         return df
-    except Exception:
-        return pd.read_excel(file, dtype=str, engine="openpyxl").fillna("")
+    except Exception as e:
+        st.error(f"Error reading file: {e}")
+        return pd.DataFrame()
 
 def fetch_asana(url):
     try:
@@ -119,6 +126,10 @@ if not ns_file:
 # Load data
 # =========================================
 ns_df = read_ns(ns_file)
+if ns_df.empty:
+    st.error("Could not read your NetSuite file. Please check file format.")
+    st.stop()
+
 ns_df.columns = [str(c).strip() for c in ns_df.columns]
 uv_df = fetch_asana(UV_SHEET_CSV)
 custom_df = fetch_asana(CUSTOM_SHEET_CSV)
