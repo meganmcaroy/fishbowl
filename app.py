@@ -39,13 +39,17 @@ def get_cus_from_asana_name(name: str) -> str:
     m = CUS_RE.search(str(name))
     return normalize_key(m.group(0)) if m else ""
 
-def is_automated_cards(row_dict: dict | None) -> bool:
+# 🟢 Updated filter for excluded Asana sections
+def is_excluded_section(row_dict: dict | None) -> bool:
+    """Return True if the row is in an excluded Asana section."""
     if not row_dict:
         return False
     for k, v in row_dict.items():
         k_norm = re.sub(r"\s+|[/_]", "", str(k).strip().lower())
         if k_norm in {"section","sectioncolumn","column"}:
-            return str(v).strip().lower() == "automated cards"
+            value = str(v).strip().lower()
+            if value in {"automated cards", "ready to ship", "shipped and complete"}:
+                return True
     return False
 
 def dedupe_prefix(sku: str, prefix: str) -> str:
@@ -127,8 +131,8 @@ def prep_asana(df, source):
         return pd.DataFrame()
     df["_CUS"] = df["Name"].map(get_cus_from_asana_name)
     df = df[df["_CUS"] != ""]
-    df["_AUTO"] = df.apply(lambda r: is_automated_cards(r.to_dict()), axis=1)
-    df = df[~df["_AUTO"]]
+    df["_EXCLUDE"] = df.apply(lambda r: is_excluded_section(r.to_dict()), axis=1)
+    df = df[~df["_EXCLUDE"]]  # filter out excluded sections
     df["_SRC"] = source
     return df
 
@@ -147,7 +151,6 @@ if "PO/Check Number" not in ns_df.columns:
 ns_df["_CUS_KEY"] = ns_df["PO/Check Number"].apply(lambda x: re.sub(r"[^A-Za-z0-9]", "", str(x)).upper())
 asana_all["_CUS_KEY"] = asana_all["_CUS"].apply(lambda x: re.sub(r"[^A-Za-z0-9]", "", str(x)).upper())
 
-# Include Due Date from Asana in the merge
 columns_to_merge = ["_CUS_KEY", "_SRC", "_CUS"]
 if "Due Date" in asana_all.columns:
     columns_to_merge.append("Due Date")
@@ -159,7 +162,7 @@ if matched.empty:
     st.stop()
 
 # =========================================
-# 🧹 Filter out “Shopify Shipping Charge”
+# Filter out “Shopify Shipping Charge”
 # =========================================
 if "Item" in matched.columns:
     matched = matched[~matched["Item"].str.contains("shopify shipping charge", case=False, na=False)]
@@ -175,7 +178,7 @@ def determine_product_number(row):
     desc = str(desc).strip()
     if ":" not in desc:
         return desc.upper()
-    sku = extract_after_colon(desc)
+    sku = desc.split(":", 1)[1].strip().upper()
     if not sku:
         return ""
     if src == "UV":
@@ -229,7 +232,7 @@ if "Shipping Address" in matched.columns:
     out_df["ShipToCountry"] = parsed_ship.apply(lambda x: x[4])
 
 # =========================================
-# Defaults (Status = 20)
+# Defaults
 # =========================================
 out_df["Status"] = "20"
 out_df["CarrierName"] = "Will Call"
