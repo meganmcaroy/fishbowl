@@ -1,6 +1,8 @@
 import re
 import pandas as pd
 import streamlit as st
+import time
+import requests
 
 # =========================================
 # App setup
@@ -39,7 +41,6 @@ def get_cus_from_asana_name(name: str) -> str:
     m = CUS_RE.search(str(name))
     return normalize_key(m.group(0)) if m else ""
 
-# 🟢 Updated filter for excluded Asana sections
 def is_excluded_section(row_dict: dict | None) -> bool:
     """Return True if the row is in an excluded Asana section."""
     if not row_dict:
@@ -75,7 +76,6 @@ def format_date(date_str):
         pass
     return ""
 
-# 🟢 Improved file reader: now fully supports .xls, .xlsx, .csv
 def read_ns(file):
     try:
         filename = file.name.lower()
@@ -92,9 +92,12 @@ def read_ns(file):
         st.error(f"Error reading file: {e}")
         return pd.DataFrame()
 
+# 🟢 Updated fetch_asana with cache busting + debugging output
 def fetch_asana(url):
     try:
-        return pd.read_csv(url, dtype=str).fillna("")
+        fresh_url = f"{url}&cacheBust={int(time.time())}"
+        df = pd.read_csv(fresh_url, dtype=str).fillna("")
+        return df
     except Exception as e:
         st.error(f"Could not fetch Asana sheet: {e}")
         return pd.DataFrame()
@@ -117,6 +120,9 @@ col1, col2 = st.columns([1,1])
 with col1:
     ns_file = st.file_uploader("Upload NetSuite export (.xls, .xlsx, .csv)", type=["xls","xlsx","csv"])
 with col2:
+    if st.button("🔄 Refresh Asana Data"):
+        st.cache_data.clear()
+        st.experimental_rerun()
     st.markdown("**Asana sheets** are pulled live (UV + Custom).")
 
 if not ns_file:
@@ -131,8 +137,18 @@ if ns_df.empty:
     st.stop()
 
 ns_df.columns = [str(c).strip() for c in ns_df.columns]
+
+# 🟢 Debug: show before merging
+st.info("Fetching latest Asana sheets...")
+
 uv_df = fetch_asana(UV_SHEET_CSV)
 custom_df = fetch_asana(CUSTOM_SHEET_CSV)
+
+# 🟢 Debugging visibility for Asana sheets
+st.write("UV Asana Rows:", len(uv_df))
+st.write("Custom Asana Rows:", len(custom_df))
+st.write("UV Asana Columns:", uv_df.columns.tolist())
+st.write("Custom Asana Columns:", custom_df.columns.tolist())
 
 # =========================================
 # Prepare Asana data
@@ -167,6 +183,11 @@ if "Due Date" in asana_all.columns:
     columns_to_merge.append("Due Date")
 
 matched = ns_df.merge(asana_all[columns_to_merge], on="_CUS_KEY", how="inner")
+
+# 🟢 Debug: show matching summary
+st.write("Matched rows:", len(matched))
+if not matched.empty:
+    st.write("Sample matched _CUS keys:", matched["_CUS_KEY"].head().tolist())
 
 if matched.empty:
     st.warning("No NetSuite orders matched Asana CUS numbers. Ensure 'PO/Check Number' matches '#CUS#####' in Asana 'Name'.")
@@ -291,6 +312,7 @@ st.dataframe(out_df.head(100), use_container_width=True)
 
 csv_data = out_df.to_csv(index=False).encode("utf-8-sig")
 st.download_button("Download Fishbowl CSV", data=csv_data, file_name="fishbowl_upload.csv", mime="text/csv")
+
 
 
 
