@@ -92,7 +92,6 @@ def read_ns(file):
         st.error(f"Error reading file: {e}")
         return pd.DataFrame()
 
-# 🟢 Updated fetch_asana with cache busting + debugging output
 def fetch_asana(url):
     try:
         fresh_url = f"{url}&cacheBust={int(time.time())}"
@@ -138,13 +137,11 @@ if ns_df.empty:
 
 ns_df.columns = [str(c).strip() for c in ns_df.columns]
 
-# 🟢 Debug: show before merging
 st.info("Fetching latest Asana sheets...")
 
 uv_df = fetch_asana(UV_SHEET_CSV)
 custom_df = fetch_asana(CUSTOM_SHEET_CSV)
 
-# 🟢 Debugging visibility for Asana sheets
 st.write("UV Asana Rows:", len(uv_df))
 st.write("Custom Asana Rows:", len(custom_df))
 st.write("UV Asana Columns:", uv_df.columns.tolist())
@@ -181,10 +178,11 @@ asana_all["_CUS_KEY"] = asana_all["_CUS"].apply(lambda x: re.sub(r"[^A-Za-z0-9]"
 columns_to_merge = ["_CUS_KEY", "_SRC", "_CUS"]
 if "Due Date" in asana_all.columns:
     columns_to_merge.append("Due Date")
+if "Section/Column" in asana_all.columns:
+    columns_to_merge.append("Section/Column")
 
 matched = ns_df.merge(asana_all[columns_to_merge], on="_CUS_KEY", how="inner")
 
-# 🟢 Debug: show matching summary
 st.write("Matched rows:", len(matched))
 if not matched.empty:
     st.write("Sample matched _CUS keys:", matched["_CUS_KEY"].head().tolist())
@@ -202,14 +200,24 @@ elif "Product Description" in matched.columns:
     matched = matched[~matched["Product Description"].str.contains("shopify shipping charge", case=False, na=False)]
 
 # =========================================
-# ProductNumber Logic (No colon = no prefix)
+# ProductNumber Logic
 # =========================================
 def determine_product_number(row):
     desc = row.get("Item") or row.get("Product Description") or ""
     src = row.get("_SRC", "")
+    section = str(row.get("Section/Column", "")).strip().lower()
     desc = str(desc).strip()
+
+    # 🟢 NEW LOGIC: Handle Blank - ship ASAP case
+    if "blank - ship asap" in section:
+        if ":" in desc:
+            return desc.split(":", 1)[1].strip().upper()
+        else:
+            return desc.upper()
+
     if ":" not in desc:
         return desc.upper()
+
     sku = desc.split(":", 1)[1].strip().upper()
     if not sku:
         return ""
@@ -226,18 +234,16 @@ matched["ProductNumber"] = matched.apply(determine_product_number, axis=1)
 # Build Output Frame
 # =========================================
 out_df = pd.DataFrame(columns=FISHBOWL_COLUMNS)
-
-# Product fields
 out_df["ProductDescription"] = matched["Item"] if "Item" in matched.columns else matched["Product Description"]
 out_df["ProductNumber"] = matched["ProductNumber"]
 
-# ProductQuantity from NetSuite
+# ProductQuantity
 if "Quantity" in matched.columns:
     out_df["ProductQuantity"] = matched["Quantity"]
 elif "Quanity" in matched.columns:
     out_df["ProductQuantity"] = matched["Quanity"]
 
-# CF-Due Date from Asana
+# CF-Due Date
 if "Due Date" in matched.columns:
     out_df["CF-Due Date"] = matched["Due Date"]
 
@@ -263,9 +269,7 @@ if "Shipping Address" in matched.columns:
     out_df["ShipToZip"] = parsed_ship.apply(lambda x: x[3])
     out_df["ShipToCountry"] = parsed_ship.apply(lambda x: x[4])
 
-# =========================================
 # Defaults
-# =========================================
 out_df["Status"] = "20"
 out_df["CarrierName"] = "Will Call"
 out_df["LocationGroupName"] = "Farm"
@@ -291,6 +295,12 @@ else:
 def make_sonum(row):
     cus = row.get("_CUS", "").strip()
     sku = row.get("ProductNumber", "").strip().upper()
+    section = str(row.get("Section/Column", "")).strip().lower()
+
+    # 🟢 NEW LOGIC: Handle Blank - ship ASAP case
+    if "blank - ship asap" in section:
+        return f"Blank {cus}"
+
     if sku.startswith("UV-"):
         return f"UV {cus}"
     elif sku.startswith("L-"):
@@ -300,7 +310,7 @@ def make_sonum(row):
 
 out_df["SONum"] = matched.apply(make_sonum, axis=1)
 
-# PONum = Document Number
+# PONum
 if "Document Number" in matched.columns:
     out_df["PONum"] = matched["Document Number"]
 
@@ -312,6 +322,7 @@ st.dataframe(out_df.head(100), use_container_width=True)
 
 csv_data = out_df.to_csv(index=False).encode("utf-8-sig")
 st.download_button("Download Fishbowl CSV", data=csv_data, file_name="fishbowl_upload.csv", mime="text/csv")
+
 
 
 
