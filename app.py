@@ -208,7 +208,7 @@ def determine_product_number(row):
     section = str(row.get("Section/Column", "")).strip().lower()
     desc = str(desc).strip()
 
-    # 🟢 NEW LOGIC: Handle Blank - ship ASAP case
+    # 🟢 Handle Blank - ship ASAP
     if "blank - ship asap" in section:
         if ":" in desc:
             return desc.split(":", 1)[1].strip().upper()
@@ -229,6 +229,23 @@ def determine_product_number(row):
         return sku
 
 matched["ProductNumber"] = matched.apply(determine_product_number, axis=1)
+
+# =========================================
+# EXCLUDE specific SKUs (bare, UV-, or L-)
+# =========================================
+EXCLUDE_SKUS = [
+    "SM-BULK-CUSTOM-ENGR",
+    "REP-SM-BULK-CUSTOM-ENGR-DOUBLE",
+    "SM-BULK-CUSTOM-ENGR-PERSONALIZE",
+]
+exclude_pattern = r'^(?:UV-|L-)?(?:' + "|".join(map(re.escape, EXCLUDE_SKUS)) + r')$'
+
+before_count = len(matched)
+mask_exclude = matched["ProductNumber"].astype(str).str.upper().str.fullmatch(exclude_pattern)
+matched = matched[~mask_exclude]
+excluded_count = before_count - len(matched)
+if excluded_count > 0:
+    st.info(f"Excluded {excluded_count} line(s) with ProductNumber in {EXCLUDE_SKUS}")
 
 # =========================================
 # Build Output Frame
@@ -297,7 +314,7 @@ def make_sonum(row):
     sku = row.get("ProductNumber", "").strip().upper()
     section = str(row.get("Section/Column", "")).strip().lower()
 
-    # 🟢 NEW LOGIC: Handle Blank - ship ASAP case
+    # Handle Blank - ship ASAP
     if "blank - ship asap" in section:
         return f"Blank {cus}"
 
